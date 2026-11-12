@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Credit risk analyzer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="cv"></canvas><div class="glow"></div>
+<main class="stage" id="stage">
+<section class="card" id="card">
+<div class="scan"></div>
+<div class="inner">
+<form id="form" class="view" autocomplete="off" novalidate>
+<div class="head"><h1>Loan application</h1><span class="hint" id="hint">Move your cursor</span></div>
+<div class="grid">
+<div><label for="age">Age</label><input id="age" type="number" inputmode="numeric" value="28"></div>
+<div><label for="inc">Income ($)</label><input id="inc" type="number" inputmode="numeric" value="54000"></div>
+<div><label for="amt">Loan ($)</label><input id="amt" type="number" inputmode="numeric" value="10000"></div>
+<div><label for="rate">Rate (%)</label><input id="rate" type="number" inputmode="decimal" step="0.1" value="11.4"></div>
+<div><label for="emp">Emp. years</label><input id="emp" type="number" inputmode="decimal" value="4"></div>
+<div><label for="cred">Credit yrs</label><input id="cred" type="number" inputmode="numeric" value="6"></div>
+</div>
+<div class="row"><span class="lbl">Home</span><div class="chips" data-k="home"></div></div>
+<div class="row two">
+<div><label for="intent">Loan purpose</label><select id="intent"><option value="PERSONAL">Personal</option><option value="EDUCATION">Education</option><option value="MEDICAL">Medical</option><option value="VENTURE">Venture</option><option value="HOMEIMPROVEMENT">Home improvement</option><option value="DEBTCONSOLIDATION">Debt consolidation</option></select></div>
+<div><span class="lbl">Past default</span><div class="chips" data-k="def"></div></div>
+</div>
+<button class="go" id="go" type="submit">Analyze application</button>
+<div class="msg" id="msg" role="status" aria-live="polite"></div>
+</form>
+<div id="res" class="res hide">
+<div class="head"><h1>Result</h1></div>
+<div class="ring"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="t" cx="60" cy="60" r="54"/><circle class="v" id="rv" cx="60" cy="60" r="54"/></svg><b id="pc">0%</b></div>
+<div class="verdict" id="vd"></div>
+<div class="sub">Probability of default</div>
+<div id="fx"></div>
+<button class="back" id="back" type="button">New application</button>
+</div>
+</div>
+</section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>
