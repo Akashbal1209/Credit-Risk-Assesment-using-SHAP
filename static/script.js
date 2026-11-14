@@ -103,19 +103,100 @@
     tilt.style.transformStyle = "preserve-3d";
   }
 
+  /* ---------- Grade rules (taken from credit_risk_dataset.csv) ---------- */
+  // Interest rate range per grade: 1st to 99th percentile of the training data,
+  // so a few outlier rows (e.g. 6.0% on grade D) don't widen the range.
+  const RATE_RANGES = {
+    A: [5.4, 9.6],
+    B: [8.9, 12.7],
+    C: [10.9, 16.0],
+    D: [12.5, 18.3],
+    E: [14.1, 19.9],
+    F: [15.4, 21.7],
+    G: [17.9, 22.8],
+  };
+  // No applicant with a prior default has grade A or B in the training data.
+  const GRADES_BLOCKED_ON_DEFAULT = ["A", "B"];
+  const FIRST_GRADE_AFTER_DEFAULT = "C";
+
   /* ---------- Chip groups (radio behaviour) ---------- */
+  function selectChip(group, btn) {
+    group.querySelectorAll("button").forEach((b) => {
+      const on = b === btn;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-checked", String(on));
+    });
+  }
+
   document.querySelectorAll(".chips").forEach((group) => {
     group.addEventListener("click", (e) => {
       const btn = e.target.closest("button");
-      if (!btn) return;
-      group.querySelectorAll("button").forEach((b) => {
-        const on = b === btn;
-        b.classList.toggle("on", on);
-        b.setAttribute("aria-checked", String(on));
-      });
+      if (!btn || btn.disabled) return;
+      selectChip(group, btn);
+      if (group.id === "cb_person_default_on_file") applyDefaultRule();
+      if (group.id === "loan_grade") onGradeChange();
     });
   });
   const chipValue = (id) => $(id).querySelector("button.on").dataset.value;
+
+  /* ---------- Error / hint text under a field ---------- */
+  const errOf = (el) => el.parentElement.querySelector(".err");
+
+  function setFieldError(el, msg) {
+    el.classList.toggle("bad", Boolean(msg));
+    const err = errOf(el);
+    err.classList.remove("hint");
+    err.textContent = msg;
+  }
+
+  // Shows the typical interest range for the selected grade, unless the field
+  // is currently showing an error.
+  function updateRateHint() {
+    const rateEl = $("loan_int_rate");
+    if (rateEl.classList.contains("bad")) return;
+    const g = chipValue("loan_grade");
+    const [lo, hi] = RATE_RANGES[g];
+    const err = errOf(rateEl);
+    err.classList.add("hint");
+    err.textContent = `Grade ${g}: ${lo}–${hi}%`;
+  }
+
+  function onGradeChange() {
+    // A new grade means a new range, so drop any old range error and show the new hint.
+    const rateEl = $("loan_int_rate");
+    if (rateEl.classList.contains("bad") && rateEl.dataset.rangeError === "1") {
+      setFieldError(rateEl, "");
+      delete rateEl.dataset.rangeError;
+    }
+    updateRateHint();
+  }
+
+  /* ---------- Rule: prior default => grade C or lower ---------- */
+  const gradeGroup = $("loan_grade");
+  const gradeNote = $("grade-note");
+
+  function applyDefaultRule() {
+    const hasDefault = chipValue("cb_person_default_on_file") === "Y";
+    let moved = false;
+
+    gradeGroup.querySelectorAll("button").forEach((b) => {
+      const blocked = hasDefault && GRADES_BLOCKED_ON_DEFAULT.includes(b.dataset.value);
+      b.disabled = blocked;
+      if (blocked && b.classList.contains("on")) moved = true;
+    });
+
+    if (moved) {
+      selectChip(gradeGroup, gradeGroup.querySelector(`button[data-value="${FIRST_GRADE_AFTER_DEFAULT}"]`));
+    }
+
+    gradeNote.textContent = hasDefault
+      ? (moved
+          ? `Grade moved to ${FIRST_GRADE_AFTER_DEFAULT}: applicants with a prior default are graded C or lower.`
+          : "Applicants with a prior default are graded C or lower.")
+      : "";
+
+    onGradeChange();
+  }
 
   /* ---------- Validation ---------- */
   const RULES = {
@@ -132,7 +213,6 @@
     let firstBad = null;
     for (const [id, r] of Object.entries(RULES)) {
       const el = $(id);
-      const err = el.parentElement.querySelector(".err");
       const raw = el.value.trim();
       const n = Number(raw);
       let msg = "";
@@ -140,26 +220,49 @@
       else if (r.int && !Number.isInteger(n)) msg = "Use a whole number";
       else if (r.min !== undefined && n < r.min) msg = `Must be at least ${r.min}`;
       else if (r.max !== undefined && n > r.max) msg = `Must be at most ${r.max}`;
-      el.classList.toggle("bad", Boolean(msg));
-      err.textContent = msg;
+      setFieldError(el, msg);
       if (msg && !firstBad) firstBad = el;
       values[id] = n;
     }
+
     // The model was trained on rows where employment length <= age.
     const empEl = $("person_emp_length");
     if (!empEl.classList.contains("bad") && values.person_emp_length > values.person_age) {
-      empEl.classList.add("bad");
-      empEl.parentElement.querySelector(".err").textContent = "Can't exceed age";
+      setFieldError(empEl, "Can't exceed age");
       if (!firstBad) firstBad = empEl;
     }
+
+    // Interest rate must sit inside the range seen for the selected grade.
+    const grade = chipValue("loan_grade");
+    const rateEl = $("loan_int_rate");
+    delete rateEl.dataset.rangeError;
+    if (!rateEl.classList.contains("bad")) {
+      const [lo, hi] = RATE_RANGES[grade];
+      if (values.loan_int_rate < lo || values.loan_int_rate > hi) {
+        setFieldError(rateEl, `Grade ${grade} needs ${lo}–${hi}%`);
+        rateEl.dataset.rangeError = "1";
+        if (!firstBad) firstBad = rateEl;
+      } else {
+        updateRateHint();
+      }
+    }
+
+    // Safety net: the chips are disabled, but never send this combination.
+    if (chipValue("cb_person_default_on_file") === "Y" && GRADES_BLOCKED_ON_DEFAULT.includes(grade)) {
+      applyDefaultRule();
+      if (!firstBad) firstBad = gradeGroup.querySelector("button.on");
+    }
+
     return { values, firstBad };
   }
 
   document.querySelectorAll(".in").forEach((el) => {
     el.addEventListener("input", () => {
       el.classList.remove("bad");
+      delete el.dataset.rangeError;
       const err = el.parentElement.querySelector(".err");
       if (err) err.textContent = "";
+      if (el.id === "loan_int_rate") updateRateHint();
     });
   });
 
@@ -343,4 +446,5 @@
   });
 
   $("back").setAttribute("aria-hidden", "true");
+  applyDefaultRule(); // sets the initial grade state and the interest hint
 })();

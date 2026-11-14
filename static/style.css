@@ -192,6 +192,13 @@ select.in option { background: #121728; color: var(--text); }
 .chips button:hover { background: rgba(255, 255, 255, 0.12); transform: translateY(-1px); }
 .chips button:focus-visible { outline: 2px solid #7c83ff; outline-offset: 2px; }
 .chips button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chips button:disabled,
+.chips button:disabled:hover { opacity: 0.3; cursor: not-allowed; transform: none; background: rgba(255, 255, 255, 0.06); }
+
+/* Grade-based hint under the interest rate field, and the note under the grade chips */
+.err.hint { color: var(--muted); }
+.note { margin: 6px 0 0; font-size: 11px; color: var(--muted); }
+.note:empty { display: none; }
 
 .go {
   position: relative;
