@@ -1,46 +1,152 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Credit risk analyzer</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Credit Risk Check</title>
+  <meta name="description" content="Estimate the default risk of a loan application with a machine learning model.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<canvas id="cv"></canvas><div class="glow"></div>
-<main class="stage" id="stage">
-<section class="card" id="card">
-<div class="scan"></div>
-<div class="inner">
-<form id="form" class="view" autocomplete="off" novalidate>
-<div class="head"><h1>Loan application</h1><span class="hint" id="hint">Move your cursor</span></div>
-<div class="grid">
-<div><label for="age">Age</label><input id="age" type="number" inputmode="numeric" value="28"></div>
-<div><label for="inc">Income ($)</label><input id="inc" type="number" inputmode="numeric" value="54000"></div>
-<div><label for="amt">Loan ($)</label><input id="amt" type="number" inputmode="numeric" value="10000"></div>
-<div><label for="rate">Rate (%)</label><input id="rate" type="number" inputmode="decimal" step="0.1" value="11.4"></div>
-<div><label for="emp">Emp. years</label><input id="emp" type="number" inputmode="decimal" value="4"></div>
-<div><label for="cred">Credit yrs</label><input id="cred" type="number" inputmode="numeric" value="6"></div>
-</div>
-<div class="row"><span class="lbl">Home</span><div class="chips" data-k="home"></div></div>
-<div class="row two">
-<div><label for="intent">Loan purpose</label><select id="intent"><option value="PERSONAL">Personal</option><option value="EDUCATION">Education</option><option value="MEDICAL">Medical</option><option value="VENTURE">Venture</option><option value="HOMEIMPROVEMENT">Home improvement</option><option value="DEBTCONSOLIDATION">Debt consolidation</option></select></div>
-<div><span class="lbl">Past default</span><div class="chips" data-k="def"></div></div>
-</div>
-<button class="go" id="go" type="submit">Analyze application</button>
-<div class="msg" id="msg" role="status" aria-live="polite"></div>
-</form>
-<div id="res" class="res hide">
-<div class="head"><h1>Result</h1></div>
-<div class="ring"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="t" cx="60" cy="60" r="54"/><circle class="v" id="rv" cx="60" cy="60" r="54"/></svg><b id="pc">0%</b></div>
-<div class="verdict" id="vd"></div>
-<div class="sub">Probability of default</div>
-<div id="fx"></div>
-<button class="back" id="back" type="button">New application</button>
-</div>
-</div>
-</section>
-</main>
-<script src="script.js"></script>
+  <canvas id="bg" aria-hidden="true"></canvas>
+  <div class="glow" id="glow" aria-hidden="true"></div>
+
+  <main class="stage">
+    <header class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <span>Credit risk check</span>
+    </header>
+
+    <div class="tilt" id="tilt">
+      <div class="card" id="card">
+
+        <!-- FRONT: application form -->
+        <section class="face front" id="front">
+          <div class="beam" id="beam" aria-hidden="true"></div>
+          <div class="glare" id="glare" aria-hidden="true"></div>
+
+          <h1>Loan application</h1>
+          <p class="sub">Fill in the applicant details, then run the model.</p>
+
+          <form id="form" novalidate autocomplete="off">
+            <div class="grid">
+              <label class="field">
+                <span class="lb">Age</span>
+                <input class="in" id="person_age" type="number" inputmode="numeric" min="18" max="100" step="1" value="28">
+                <span class="err" aria-live="polite"></span>
+              </label>
+              <label class="field">
+                <span class="lb">Annual income ($)</span>
+                <input class="in" id="person_income" type="number" inputmode="decimal" min="1" step="any" value="54000">
+                <span class="err" aria-live="polite"></span>
+              </label>
+              <label class="field">
+                <span class="lb">Employment (years)</span>
+                <input class="in" id="person_emp_length" type="number" inputmode="decimal" min="0" max="60" step="any" value="4">
+                <span class="err" aria-live="polite"></span>
+              </label>
+              <label class="field">
+                <span class="lb">Loan amount ($)</span>
+                <input class="in" id="loan_amnt" type="number" inputmode="decimal" min="1" step="any" value="12000">
+                <span class="err" aria-live="polite"></span>
+              </label>
+              <label class="field">
+                <span class="lb">Interest rate (%)</span>
+                <input class="in" id="loan_int_rate" type="number" inputmode="decimal" min="0.1" max="40" step="any" value="11.4">
+                <span class="err" aria-live="polite"></span>
+              </label>
+              <label class="field">
+                <span class="lb">Credit history (years)</span>
+                <input class="in" id="cb_person_cred_hist_length" type="number" inputmode="numeric" min="0" max="80" step="1" value="6">
+                <span class="err" aria-live="polite"></span>
+              </label>
+            </div>
+
+            <div class="row2">
+              <label class="field">
+                <span class="lb">Loan purpose</span>
+                <select class="in" id="loan_intent">
+                  <option value="EDUCATION" selected>Education</option>
+                  <option value="MEDICAL">Medical</option>
+                  <option value="VENTURE">Venture</option>
+                  <option value="PERSONAL">Personal</option>
+                  <option value="DEBTCONSOLIDATION">Debt consolidation</option>
+                  <option value="HOMEIMPROVEMENT">Home improvement</option>
+                </select>
+              </label>
+              <div class="field">
+                <span class="lb" id="lb-default">Prior default on file</span>
+                <div class="chips" id="cb_person_default_on_file" role="radiogroup" aria-labelledby="lb-default">
+                  <button type="button" role="radio" aria-checked="true" data-value="N" class="on">No</button>
+                  <button type="button" role="radio" aria-checked="false" data-value="Y">Yes</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="field">
+              <span class="lb" id="lb-home">Home ownership</span>
+              <div class="chips" id="person_home_ownership" role="radiogroup" aria-labelledby="lb-home">
+                <button type="button" role="radio" aria-checked="true" data-value="RENT" class="on">Rent</button>
+                <button type="button" role="radio" aria-checked="false" data-value="OWN">Own</button>
+                <button type="button" role="radio" aria-checked="false" data-value="MORTGAGE">Mortgage</button>
+                <button type="button" role="radio" aria-checked="false" data-value="OTHER">Other</button>
+              </div>
+            </div>
+
+            <div class="field">
+              <span class="lb" id="lb-grade">Loan grade</span>
+              <div class="chips" id="loan_grade" role="radiogroup" aria-labelledby="lb-grade">
+                <button type="button" role="radio" aria-checked="false" data-value="A">A</button>
+                <button type="button" role="radio" aria-checked="true" data-value="B" class="on">B</button>
+                <button type="button" role="radio" aria-checked="false" data-value="C">C</button>
+                <button type="button" role="radio" aria-checked="false" data-value="D">D</button>
+                <button type="button" role="radio" aria-checked="false" data-value="E">E</button>
+                <button type="button" role="radio" aria-checked="false" data-value="F">F</button>
+                <button type="button" role="radio" aria-checked="false" data-value="G">G</button>
+              </div>
+            </div>
+
+            <button class="go" id="go" type="submit">Analyze application</button>
+            <p class="status" id="status" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <!-- BACK: result -->
+        <section class="face back" id="back" aria-live="polite">
+          <p class="lb">Default probability</p>
+
+          <svg class="ring-svg" viewBox="0 0 160 160" role="img" aria-labelledby="ring-t">
+            <title id="ring-t">Default probability ring</title>
+            <circle class="ring-track" cx="80" cy="80" r="64"/>
+            <circle class="ring-fill" id="ring" cx="80" cy="80" r="64" transform="rotate(-90 80 80)"/>
+            <g id="tick"><line x1="80" y1="6" x2="80" y2="22"/></g>
+            <text id="big" x="80" y="90" text-anchor="middle">0%</text>
+            <text id="big-sub" x="80" y="108" text-anchor="middle">chance of default</text>
+          </svg>
+
+          <div class="verdict" id="verdict">Low risk</div>
+          <p class="thr" id="thr"></p>
+
+          <div class="snap">
+            <p class="lb">Input snapshot</p>
+            <div class="bar"><b>Loan vs income</b><i><s id="f1"></s></i><em id="v1"></em></div>
+            <div class="bar"><b>Interest rate</b><i><s id="f2"></s></i><em id="v2"></em></div>
+            <div class="bar"><b>Loan grade</b><i><s id="f3"></s></i><em id="v3"></em></div>
+            <div class="bar"><b>Credit history</b><i><s id="f4"></s></i><em id="v4"></em></div>
+          </div>
+
+          <button class="ghost" id="edit" type="button">Edit application</button>
+        </section>
+
+      </div>
+    </div>
+
+    <p class="foot">Model output is an estimate to support a decision, not a decision on its own.</p>
+  </main>
+
+  <script src="script.js"></script>
 </body>
 </html>

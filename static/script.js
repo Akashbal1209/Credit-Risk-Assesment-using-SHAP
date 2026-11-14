@@ -1,60 +1,346 @@
-/* Live mode: calls /predict on the same server. Set DEMO = true to preview with the stand-in formula. */
-const DEMO=false, API_URL="";
-const $=s=>document.querySelector(s);
-const st={grade:"B",home:"RENT",def:"N"};
-const opts={home:[["Rent","RENT"],["Own","OWN"],["Mortgage","MORTGAGE"]],def:[["No","N"],["Yes","Y"]]};
-document.querySelectorAll(".chips").forEach(box=>{const k=box.dataset.k;opts[k].forEach(([l,v])=>{v=v||l;const b=document.createElement("button");b.type="button";b.textContent=l;if(st[k]===v)b.classList.add("on");b.onclick=()=>{st[k]=v;[...box.children].forEach(c=>c.classList.toggle("on",c===b))};box.appendChild(b)})});
+(() => {
+  "use strict";
 
-/* background particles */
-const cv=$("#cv"),cx=cv.getContext("2d"),still=matchMedia("(prefers-reduced-motion:reduce)").matches;
-let W,H,P=[],mx=0,my=0,col=[99,102,241],tg=[99,102,241];
-function fit(){const d=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;cv.width=W*d;cv.height=H*d;cx.setTransform(d,0,0,d,0,0);P=Array.from({length:Math.round(W*H/16000)+22},()=>({x:Math.random()*W,y:Math.random()*H,vx:(Math.random()-.5)*(still?0:.35),vy:(Math.random()-.5)*(still?0:.35),z:Math.random()*.8+.2}))}
-fit();addEventListener("resize",fit);
-(function loop(){cx.clearRect(0,0,W,H);for(let i=0;i<3;i++)col[i]+=(tg[i]-col[i])*.04;const c=col.map(Math.round).join(",");
-P.forEach(p=>{p.x+=p.vx;p.y+=p.vy;if(p.x<0||p.x>W)p.vx*=-1;if(p.y<0||p.y>H)p.vy*=-1;p.px=p.x+mx*42*p.z;p.py=p.y+my*42*p.z});
-for(let i=0;i<P.length;i++){const a=P[i];cx.fillStyle="rgba("+c+","+(.5+a.z*.5)+")";cx.beginPath();cx.arc(a.px,a.py,a.z*1.8+.4,0,7);cx.fill();
-for(let j=i+1;j<P.length;j++){const b=P[j],d=Math.hypot(a.px-b.px,a.py-b.py);if(d<130){cx.strokeStyle="rgba("+c+","+(.28*(1-d/130))+")";cx.beginPath();cx.moveTo(a.px,a.py);cx.lineTo(b.px,b.py);cx.stroke()}}}
-requestAnimationFrame(loop)})();
+  // Same-origin by default. For local testing of the HTML on its own, set
+  // window.API_URL = "http://127.0.0.1:8000/predict" before this script loads.
+  const API_URL = window.API_URL || "/predict";
+  const REQUEST_TIMEOUT_MS = 60000; // Render free instances can take ~30-50s to wake up
+  const MIN_ANALYSIS_MS = 1700;     // keep the scan animation visible even on fast responses
+  const CIRC = 2 * Math.PI * 64;    // ring circumference (r = 64)
 
-/* tilt + glare (fine pointers only) */
-const card=$("#card"),fine=matchMedia("(pointer:fine)").matches;
-if(!fine)$("#hint").textContent="";
-addEventListener("pointermove",e=>{mx=e.clientX/W-.5;my=e.clientY/H-.5;if(!fine||still)return;const r=card.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
-card.style.transform="rotateY("+((x-.5)*10)+"deg) rotateX("+((.5-y)*10)+"deg)";card.style.setProperty("--gx",x*100+"%");card.style.setProperty("--gy",y*100+"%")});
-document.addEventListener("pointerleave",()=>{card.style.transform=""});
+  const $ = (id) => document.getElementById(id);
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-/* data */
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-function payload(){const n=id=>parseFloat($("#"+id).value),inc=n("inc"),amt=n("amt");
-return{person_age:Math.round(n("age")),person_income:inc,person_home_ownership:st.home,person_emp_length:n("emp"),loan_intent:$("#intent").value,loan_grade:st.grade,loan_amnt:amt,loan_int_rate:n("rate"),loan_percent_income:+(amt/inc).toFixed(2),cb_person_default_on_file:st.def,cb_person_cred_hist_length:Math.round(n("cred"))}}
-function mock(p){const g="ABCDEFG".indexOf(p.loan_grade)/6,pti=Math.min(1,p.loan_percent_income/.5),r=Math.min(1,(p.loan_int_rate-5)/19);
-let x=.06+.38*g+.28*pti+.2*r+(p.person_home_ownership==="RENT"?.05:0)+(p.cb_person_default_on_file==="Y"?.08:0)-(p.person_emp_length>5?.04:0);
-x=Math.max(.02,Math.min(.97,x));const t=.38;return{default_probability:x,default_prediction:+(x>=t),threshold:t,Result:x>=t?"High Risk":"Low Risk"}}
-async function call(p,note){if(DEMO){await sleep(600);return mock(p)}
-for(let i=0;i<4;i++){const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),45000),wake=setTimeout(()=>note("Server is waking up. This can take up to a minute…"),4000);
-try{const r=await fetch(API_URL+"/predict",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p),signal:ctl.signal});clearTimeout(to);clearTimeout(wake);
-if(r.status===422)throw new Error("bad");if(!r.ok)throw new Error("srv");return await r.json()}
-catch(e){clearTimeout(to);clearTimeout(wake);if(e.message==="bad")throw e;if(i<3){note("Retrying ("+(i+2)+" of 4)…");await sleep(2500)}}}
-throw new Error("down")}
+  /* ---------- Particle background ---------- */
+  const cv = $("bg");
+  const cx = cv.getContext("2d");
+  let W = 0, H = 0, particles = [];
+  let mx = 0.5, my = 0.5, tint = "124,131,255";
 
-/* submit */
-const form=$("#form"),msg=$("#msg"),go=$("#go"),steps=["Reading profile","Scoring 11 features","Applying risk threshold"];
-form.addEventListener("submit",async e=>{e.preventDefault();msg.className="msg";msg.textContent="";
-let ok=true;["age","inc","amt","rate","emp","cred"].forEach(id=>{const el=$("#"+id),v=parseFloat(el.value),bad=!(v>=0)||(["age","inc","amt"].includes(id)&&v<=0);el.classList.toggle("bad",bad);if(bad)ok=false});
-if(!ok){msg.className="msg err";msg.textContent="Check the highlighted fields. Age, income, and loan need a value above 0.";return}
-const p=payload();go.disabled=true;card.classList.add("run");let k=0;go.textContent=steps[0]+"…";
-const tick=setInterval(()=>{k=Math.min(k+1,2);go.textContent=steps[k]+"…"},900);
-try{const [d]=await Promise.all([call(p,t=>msg.textContent=t),sleep(2700)]);show(d,p)}
-catch(err){msg.className="msg err";msg.textContent=err.message==="bad"?"The server rejected some values. Check your inputs and try again.":"Couldn’t reach the server. Try again in a moment."}
-finally{clearInterval(tick);card.classList.remove("run");go.disabled=false;go.textContent="Analyze application"}});
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    cv.width = W * dpr;
+    cv.height = H * dpr;
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const count = Math.round(Math.min(110, Math.max(40, (W * H) / 16000)));
+    particles = Array.from({ length: count }, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      z: Math.random() * 0.8 + 0.2,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: (Math.random() - 0.5) * 0.3,
+      dx: 0,
+      dy: 0,
+    }));
+  }
 
-function show(d,p){const hi=d.default_prediction===1,pr=d.default_probability;
-document.body.className=hi?"high":"low";tg=hi?[240,96,93]:[47,191,143];
-form.classList.add("hide");const res=$("#res");res.classList.remove("hide");res.classList.add("view");
-$("#vd").textContent=d.Result;$("#vd").style.color=hi?"var(--bad)":"var(--ok)";
-const rv=$("#rv");rv.style.stroke=hi?"var(--bad)":"var(--ok)";
-const f=[["Loan to income",Math.min(1,p.loan_percent_income/.5)],["Interest rate",Math.min(1,(p.loan_int_rate-5)/19)]];
-$("#fx").innerHTML=f.map(([n,v])=>'<div class="f"><span>'+n+'</span><i><s data-w="'+Math.round(v*100)+'"></s></i><em>'+Math.round(v*100)+'</em></div>').join("");
-requestAnimationFrame(()=>{rv.style.strokeDashoffset=339.3*(1-pr);document.querySelectorAll(".f s").forEach(s=>s.style.width=s.dataset.w+"%")});
-const t0=performance.now();(function c(t){const k=still?1:Math.min(1,(t-t0)/1300);$("#pc").textContent=(pr*100*k).toFixed(1)+"%";if(k<1)requestAnimationFrame(c)})(t0)}
-$("#back").onclick=()=>{$("#res").classList.add("hide");$("#res").classList.remove("view");form.classList.remove("hide");form.classList.remove("view");void form.offsetWidth;form.classList.add("view");document.body.className="";tg=[99,102,241];$("#rv").style.strokeDashoffset=339.3};
+  function frame() {
+    cx.clearRect(0, 0, W, H);
+    for (const p of particles) {
+      if (!reduceMotion) {
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.x < 0) p.x = W; else if (p.x > W) p.x = 0;
+        if (p.y < 0) p.y = H; else if (p.y > H) p.y = 0;
+      }
+      p.dx = p.x + (mx - 0.5) * 50 * p.z;
+      p.dy = p.y + (my - 0.5) * 50 * p.z;
+      cx.fillStyle = `rgba(${tint},${0.25 + p.z * 0.5})`;
+      cx.beginPath();
+      cx.arc(p.dx, p.dy, p.z * 2, 0, Math.PI * 2);
+      cx.fill();
+    }
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const a = particles[i], b = particles[j];
+        const d = Math.hypot(a.dx - b.dx, a.dy - b.dy);
+        if (d < 100) {
+          cx.strokeStyle = `rgba(${tint},${0.15 * (1 - d / 100)})`;
+          cx.beginPath();
+          cx.moveTo(a.dx, a.dy);
+          cx.lineTo(b.dx, b.dy);
+          cx.stroke();
+        }
+      }
+    }
+    if (!reduceMotion) requestAnimationFrame(frame);
+  }
+
+  resize();
+  frame();
+  window.addEventListener("resize", () => { resize(); if (reduceMotion) frame(); });
+
+  /* ---------- 3D tilt + glare following the pointer ---------- */
+  const tilt = $("tilt");
+  const card = $("card");
+  const glare = $("glare");
+  const finePointer = window.matchMedia("(pointer: fine)").matches;
+
+  if (finePointer && !reduceMotion) {
+    window.addEventListener("mousemove", (e) => {
+      mx = e.clientX / window.innerWidth;
+      my = e.clientY / window.innerHeight;
+      const flipped = card.classList.contains("flipped");
+      const ry = (mx - 0.5) * 12;
+      const rx = (0.5 - my) * 9;
+      // The flip rotation lives on .card; the tilt is applied to the wrapper.
+      tilt.style.transform = `rotateY(${ry}deg) rotateX(${rx}deg)`;
+      if (!flipped) {
+        const r = tilt.getBoundingClientRect();
+        const gx = ((e.clientX - r.left) / r.width) * 100;
+        const gy = ((e.clientY - r.top) / r.height) * 100;
+        glare.style.background =
+          `radial-gradient(circle at ${gx}% ${gy}%, rgba(255,255,255,0.12), transparent 55%)`;
+      }
+    });
+    document.addEventListener("mouseleave", () => {
+      tilt.style.transform = "";
+      mx = my = 0.5;
+    });
+    tilt.style.transition = "transform 0.15s ease-out";
+    tilt.style.transformStyle = "preserve-3d";
+  }
+
+  /* ---------- Chip groups (radio behaviour) ---------- */
+  document.querySelectorAll(".chips").forEach((group) => {
+    group.addEventListener("click", (e) => {
+      const btn = e.target.closest("button");
+      if (!btn) return;
+      group.querySelectorAll("button").forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-checked", String(on));
+      });
+    });
+  });
+  const chipValue = (id) => $(id).querySelector("button.on").dataset.value;
+
+  /* ---------- Validation ---------- */
+  const RULES = {
+    person_age:                 { label: "Age",            min: 18,  max: 100, int: true },
+    person_income:              { label: "Income",         min: 1 },
+    person_emp_length:          { label: "Employment",     min: 0,   max: 60 },
+    loan_amnt:                  { label: "Loan amount",    min: 1 },
+    loan_int_rate:              { label: "Interest rate",  min: 0.1, max: 40 },
+    cb_person_cred_hist_length: { label: "Credit history", min: 0,   max: 80,  int: true },
+  };
+
+  function validate() {
+    const values = {};
+    let firstBad = null;
+    for (const [id, r] of Object.entries(RULES)) {
+      const el = $(id);
+      const err = el.parentElement.querySelector(".err");
+      const raw = el.value.trim();
+      const n = Number(raw);
+      let msg = "";
+      if (raw === "" || Number.isNaN(n)) msg = "Enter a number";
+      else if (r.int && !Number.isInteger(n)) msg = "Use a whole number";
+      else if (r.min !== undefined && n < r.min) msg = `Must be at least ${r.min}`;
+      else if (r.max !== undefined && n > r.max) msg = `Must be at most ${r.max}`;
+      el.classList.toggle("bad", Boolean(msg));
+      err.textContent = msg;
+      if (msg && !firstBad) firstBad = el;
+      values[id] = n;
+    }
+    // The model was trained on rows where employment length <= age.
+    const empEl = $("person_emp_length");
+    if (!empEl.classList.contains("bad") && values.person_emp_length > values.person_age) {
+      empEl.classList.add("bad");
+      empEl.parentElement.querySelector(".err").textContent = "Can't exceed age";
+      if (!firstBad) firstBad = empEl;
+    }
+    return { values, firstBad };
+  }
+
+  document.querySelectorAll(".in").forEach((el) => {
+    el.addEventListener("input", () => {
+      el.classList.remove("bad");
+      const err = el.parentElement.querySelector(".err");
+      if (err) err.textContent = "";
+    });
+  });
+
+  /* ---------- Status line + API call ---------- */
+  const statusEl = $("status");
+  const goBtn = $("go");
+  const beam = $("beam");
+  const STEPS = ["Reading the application", "Scoring 11 features", "Applying the risk threshold"];
+
+  function setStatus(text, isError = false) {
+    statusEl.textContent = text;
+    statusEl.classList.remove("error");
+    if (isError) {
+      void statusEl.offsetWidth; // restart the shake animation
+      statusEl.classList.add("error");
+    }
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function callApi(payload) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const j = await res.json();
+          detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+        } catch (_) { /* ignore */ }
+        const e = new Error(detail || `Server returned ${res.status}`);
+        e.status = res.status;
+        throw e;
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /* ---------- Result rendering ---------- */
+  const ring = $("ring");
+  const tick = $("tick");
+  const big = $("big");
+  const glow = $("glow");
+  const fmtMoney = (n) => "$" + Math.round(n).toLocaleString("en-US");
+
+  function showResult(res, v, grade) {
+    const p = Math.min(Math.max(Number(res.default_probability), 0), 1);
+    const thr = Number(res.threshold);
+    const high = Number(res.default_prediction) === 1;
+
+    document.documentElement.style.setProperty("--risk", high ? "var(--bad)" : "var(--ok)");
+    glow.classList.remove("ok", "bad");
+    glow.classList.add(high ? "bad" : "ok");
+    tint = high ? "248,113,113" : "52,211,153";
+    if (reduceMotion) frame();
+
+    $("verdict").textContent = high ? "High risk" : "Low risk";
+    $("thr").textContent =
+      `Flagged as high risk at ${(thr * 100).toFixed(1)}% or above. Marker on the ring shows the cut-off.`;
+
+    // Reset to empty, then flip and animate in.
+    ring.style.strokeDashoffset = CIRC;
+    tick.style.transform = "rotate(0deg)";
+    big.textContent = "0%";
+    ["f1", "f2", "f3", "f4"].forEach((id) => { $(id).style.width = "0"; });
+
+    const lpi = v.loan_amnt / v.person_income;
+    const bars = [
+      ["f1", "v1", Math.min(lpi / 0.5, 1), `${Math.round(lpi * 100)}%`],
+      ["f2", "v2", Math.min(v.loan_int_rate / 25, 1), `${v.loan_int_rate.toFixed(1)}%`],
+      ["f3", "v3", (("ABCDEFG".indexOf(grade)) + 1) / 7, grade],
+      ["f4", "v4", Math.min(v.cb_person_cred_hist_length / 30, 1), `${v.cb_person_cred_hist_length} yrs`],
+    ];
+    bars.forEach(([f, t, , text]) => { $(t).textContent = text; });
+
+    card.classList.add("flipped");
+    $("back").setAttribute("aria-hidden", "false");
+
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      ring.style.strokeDashoffset = CIRC * (1 - p);
+      tick.style.transform = `rotate(${thr * 360}deg)`;
+      bars.forEach(([f, , frac]) => { $(f).style.width = `${Math.max(4, frac * 100)}%`; });
+    }));
+
+    // Count-up, time-based so it matches the ring regardless of value.
+    const target = p * 100;
+    const t0 = performance.now() + 550;
+    const dur = reduceMotion ? 1 : 1400;
+    (function tickUp(now) {
+      const k = Math.min(Math.max((now - t0) / dur, 0), 1);
+      const eased = 1 - Math.pow(1 - k, 3);
+      big.textContent = `${(target * eased).toFixed(target < 10 ? 1 : 0)}%`;
+      if (k < 1) requestAnimationFrame(tickUp);
+      else big.textContent = `${target.toFixed(target < 10 ? 1 : 0)}%`;
+    })(performance.now());
+
+    setTimeout(() => $("edit").focus({ preventScroll: true }), 900);
+  }
+
+  /* ---------- Submit ---------- */
+  $("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (goBtn.disabled) return;
+
+    const { values: v, firstBad } = validate();
+    if (firstBad) {
+      firstBad.focus();
+      setStatus("Fix the highlighted fields to continue.", true);
+      return;
+    }
+
+    const grade = chipValue("loan_grade");
+    const payload = {
+      person_age: v.person_age,
+      person_income: v.person_income,
+      person_home_ownership: chipValue("person_home_ownership"),
+      person_emp_length: v.person_emp_length,
+      loan_intent: $("loan_intent").value,
+      loan_grade: grade,
+      loan_amnt: v.loan_amnt,
+      loan_int_rate: v.loan_int_rate,
+      loan_percent_income: Math.round((v.loan_amnt / v.person_income) * 100) / 100,
+      cb_person_default_on_file: chipValue("cb_person_default_on_file"),
+      cb_person_cred_hist_length: v.cb_person_cred_hist_length,
+    };
+
+    goBtn.disabled = true;
+    goBtn.classList.add("loading");
+    goBtn.textContent = "Analyzing…";
+    beam.classList.add("go");
+
+    let stepIdx = 0;
+    setStatus(STEPS[0]);
+    const stepTimer = setInterval(() => {
+      stepIdx = Math.min(stepIdx + 1, STEPS.length - 1);
+      setStatus(STEPS[stepIdx]);
+    }, 600);
+    const wakeTimer = setTimeout(() => {
+      clearInterval(stepTimer);
+      setStatus("Waking up the server. The first request can take up to a minute…");
+    }, 4000);
+
+    try {
+      const [res] = await Promise.all([callApi(payload), sleep(MIN_ANALYSIS_MS)]);
+      showResult(res, v, grade);
+      setStatus("");
+    } catch (err) {
+      let msg;
+      if (err.name === "AbortError") msg = "The server took too long to respond. Try again in a moment.";
+      else if (err instanceof TypeError) msg = "Can't reach the server. Check your connection and try again.";
+      else if (err.status === 422) msg = "The server rejected one of the values. Check the form and try again.";
+      else msg = "Something went wrong on the server. Try again.";
+      setStatus(msg, true);
+      console.error("Prediction failed:", err);
+    } finally {
+      clearInterval(stepTimer);
+      clearTimeout(wakeTimer);
+      beam.classList.remove("go");
+      goBtn.disabled = false;
+      goBtn.classList.remove("loading");
+      goBtn.textContent = "Analyze application";
+    }
+  });
+
+  /* ---------- Back to the form ---------- */
+  $("edit").addEventListener("click", () => {
+    card.classList.remove("flipped");
+    $("back").setAttribute("aria-hidden", "true");
+    glow.classList.remove("ok", "bad");
+    tint = "124,131,255";
+    if (reduceMotion) frame();
+    setTimeout(() => $("person_age").focus({ preventScroll: true }), 700);
+  });
+
+  $("back").setAttribute("aria-hidden", "true");
+})();
