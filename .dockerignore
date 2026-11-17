@@ -1,0 +1,31 @@
+# Keep the build context small: the image only needs the API, the model files
+# and static/. The Dockerfile copies those files by name.
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+
+# Training material, not needed to serve predictions
+Credit_Risk.ipynb
+credit_risk_dataset.csv
+mlruns/
+mlflow.db
+
+# Docs and images
+README.md
+assets/
+
+# Local environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.vscode/
+
+# Local data and secrets
+data/
+.env
+live link.txt

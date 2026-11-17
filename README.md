@@ -142,6 +142,8 @@ Credit-Risk-Assesment-using-SHAP/
 │   ├── style.css
 │   └── script.js
 ├── assets/screenshot.png
+├── Dockerfile                 # container for the API
+├── .dockerignore
 ├── requirements.txt
 ├── runtime.txt
 └── .python-version            # 3.13.5
@@ -166,5 +168,26 @@ To re-run the notebook, also install the notebook-only packages (jupyter, matplo
 
 ---
 
+## Run it with Docker
+
+The image has the same Python and library versions on every machine, so there's no "works on my laptop" problem.
+
+```bash
+docker build -t credit-risk-api .
+docker run -p 8000:8000 credit-risk-api
+```
+
+Then open http://127.0.0.1:8000.
+
+- **Small image:** on Linux, the `xgboost` package also installs NVIDIA's GPU library (~800 MB). The API only predicts on CPU, so the image installs `xgboost-cpu` at the same version instead. Predictions are identical to the last decimal. Compressed image size went from 424 MB to 165 MB.
+- **Only what the API needs:** the notebook, dataset and docs stay out of the image (`.dockerignore`).
+- **Runs as a normal user**, not root.
+- **Built-in health check:** Docker calls `/health` every 30 seconds and marks the container `healthy` or `unhealthy`.
+- **Port from `$PORT`:** hosts like Render set it, and it defaults to 8000.
+
+To deploy on Render with Docker, create a Web Service from this repo and pick **Docker** as the runtime. Render finds the `Dockerfile` by itself.
+
+---
+
 ## Tech stack
-Python 3.13 · pandas · scikit-learn · XGBoost · SHAP · FastAPI · Pydantic · Render
+Python 3.13 · pandas · scikit-learn · XGBoost · SHAP · FastAPI · Pydantic · Docker · Render
