@@ -22,3 +22,7 @@ live link.txt
 
 # Local prediction log (SQLite)
 data/
+
+# MLflow tracking (local runs and artifacts)
+mlflow.db
+mlruns/

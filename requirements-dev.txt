@@ -1,7 +1,18 @@
 # Everything the API needs, plus tools for testing and training.
-# The API itself (and the Docker image) only uses requirements.txt.
+# The API itself (and its Docker image) only uses requirements.txt.
 -r requirements.txt
 
 # Tests
 pytest==9.2.0
 httpx==0.28.1
+
+# Training notebook (Credit_Risk.ipynb). Pinned, because the model only comes
+# out the same when every library has the same version. scipy is pinned too:
+# it draws the random hyperparameter candidates.
+scipy==1.18.1
+shap==0.54.1
+matplotlib==3.11.2
+seaborn==0.13.2
+mlflow==3.18.0
+nbconvert==7.17.2
+ipykernel==7.4.0

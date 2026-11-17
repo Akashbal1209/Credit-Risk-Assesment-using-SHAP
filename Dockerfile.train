@@ -1,0 +1,39 @@
+# Reproducible training environment for Credit_Risk.ipynb.
+#
+# XGBoost gives slightly different models on different operating systems and
+# library versions, even with the same random_state. Training inside this image
+# (fixed OS, Python and library versions) gives the same model file on any
+# computer. See "Retrain the model" in the README.
+#
+#   docker build -f Dockerfile.train -t credit-risk-train .
+#   docker run --rm -v "$PWD:/work" -e GIT_COMMIT=$(git rev-parse --short HEAD) credit-risk-train
+FROM python:3.13.5-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    # Writable cache folders for any user id passed with --user
+    HOME=/tmp \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    MPLBACKEND=Agg \
+    TRAINING_ENV=docker \
+    # No git in the image (the commit is passed in as GIT_COMMIT), so MLflow
+    # shouldn't warn about it.
+    GIT_PYTHON_REFRESH=quiet
+
+# Same CPU-only XGBoost build as the API image (see Dockerfile).
+COPY requirements.txt requirements-dev.txt /tmp/
+RUN cd /tmp \
+    && sed -i 's/^xgboost==/xgboost-cpu==/' requirements.txt \
+    && grep -q '^xgboost-cpu==' requirements.txt \
+    && pip install -r requirements-dev.txt \
+    && rm requirements.txt requirements-dev.txt
+
+# The project folder is mounted here at run time, so the notebook writes the
+# model files, mlflow.db and mlruns/ straight into it.
+WORKDIR /work
+
+# Runs every cell and saves the outputs back into the notebook.
+CMD ["jupyter", "nbconvert", "--to", "notebook", "--execute", "--inplace", \
+     "--ExecutePreprocessor.timeout=-1", "Credit_Risk.ipynb"]
