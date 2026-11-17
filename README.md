@@ -66,7 +66,8 @@ All steps are in `Credit_Risk.ipynb`, one section per step.
 
 ### 4. Model (sections 9–10)
 - **Baseline:** Logistic Regression.
-- **Main model:** XGBoost, tuned with `RandomizedSearchCV` (150 candidates × 5 folds), optimising **average precision**, with a fixed `random_state` so every run gives the same model.
+- **Main model:** XGBoost, tuned with `RandomizedSearchCV` (150 candidates × 5 folds), optimising **average precision**, with a fixed `random_state`.
+- **Each XGBoost model trains on one thread (`n_jobs=1`).** A fixed `random_state` alone is not enough: the same XGBoost model trained with 2 threads and with 16 threads gave probabilities up to **0.30 apart**. Re-running the notebook on a 16-core laptop instead of Colab made the search pick different settings and a different cut-off (0.529 instead of 0.604). With one thread per model the result no longer depends on the number of cores. The search still trains 16 candidates in parallel, so it isn't slower.
 
 ### 5. Calibration and threshold (sections 12–13)
 - **Sigmoid (Platt) calibration** with `CalibratedClassifierCV`, so the probability matches the real default rate. Brier score improved from **0.0608 to 0.0511**.
@@ -80,17 +81,31 @@ All steps are in `Credit_Risk.ipynb`, one section per step.
 ### 7. Saving the model (section 16)
 - Saved with `model_io.save_portable`. A plain pickle of an XGBoost model trained on Linux fails to load on Windows (`XGBoostError: input stream corrupted`). The XGBoost part is stored in XGBoost's portable format instead, so the same file loads on **Linux, Windows and macOS**.
 
+### 8. Confidence intervals (section 17)
+- The test set is one sample. **1,000 bootstrap resamples** of it show how much each score could move on another sample of the same size. The middle 95% is the confidence interval.
+- XGBoost and Logistic Regression are scored on the **same** resamples, so the interval of their difference shows whether XGBoost is really better or just lucky on this split.
+
+### 9. Experiment tracking (section 18)
+- Every training run is logged to **MLflow**: one parent run (git commit, dataset fingerprint, library versions, OS) with a child run per model.
+- Child runs: Logistic Regression baseline, untuned XGBoost, tuned XGBoost (with all 150 search candidates as a table), and the final calibrated model.
+- The final run stores its parameters, test scores with confidence intervals, the confusion matrix counts, the calibration and SHAP plots, and **the exact model files the API loads**.
+
 ---
 
 ## Results (held-out test set, 6,482 applicants, 1,418 defaults)
 
-| Metric | Logistic Regression (cut-off 0.5) | **XGBoost, calibrated (cut-off 0.604)** |
-|---|---|---|
-| ROC-AUC | 0.872 | **0.953** |
-| Precision | 0.539 | **0.957** |
-| Recall | 0.782 | 0.758 |
-| F1 | 0.638 | **0.846** |
-| Accuracy | 0.806 | **0.940** |
+| Metric | Logistic Regression (cut-off 0.5) | **XGBoost, calibrated (cut-off 0.604)** | XGBoost 95% CI |
+|---|---|---|---|
+| ROC-AUC | 0.872 | **0.953** | 0.946 – 0.960 |
+| Precision | 0.539 | **0.957** | 0.945 – 0.968 |
+| Recall | 0.782 | 0.758 | 0.735 – 0.782 |
+| F1 | 0.638 | **0.846** | 0.831 – 0.862 |
+| Accuracy | 0.806 | **0.940** | 0.934 – 0.946 |
+| Brier score (lower is better) | 0.139 | **0.051** | 0.047 – 0.055 |
+
+The intervals come from 1,000 bootstrap resamples of the test set (notebook section 17).
+
+**Is XGBoost really better?** On the same 1,000 resamples, the difference stays on XGBoost's side for ROC-AUC (+0.082, CI +0.073 to +0.090), F1 (+0.208, CI +0.191 to +0.226), precision, accuracy and Brier score. So it is better, not lucky on this split. **The one exception is recall:** Logistic Regression at its 0.5 cut-off catches slightly more defaulters (difference −0.024, CI −0.043 to −0.004). It pays for that with about 950 false alarms, against 48 for XGBoost.
 
 **Business result:** at the deployed cut-off the model catches **1,075 of 1,418 defaulters (75.8%)** and wrongly flags only **48 of 5,064 good applicants (under 1%)**. When it says "high risk", it is right **95.7%** of the time.
 
@@ -166,7 +181,7 @@ The model is calibrated, so the script also compares the **average predicted def
 
 ```
 Credit-Risk-Assesment-using-SHAP/
-├── Credit_Risk.ipynb          # EDA, cleaning, training, tuning, calibration, threshold, SHAP
+├── Credit_Risk.ipynb          # EDA, cleaning, training, tuning, calibration, threshold, SHAP, bootstrap CIs, MLflow
 ├── credit_risk_dataset.csv    # raw data
 ├── main.py                    # FastAPI app: /predict, /health, serves the web page
 ├── model_io.py                # saves/loads the model so it works on any OS
@@ -182,6 +197,7 @@ Credit-Risk-Assesment-using-SHAP/
 ├── tests/                     # pytest: API, model file, drift check
 ├── pytest.ini
 ├── Dockerfile                 # container for the API
+├── Dockerfile.train           # fixed environment for reproducible training
 ├── .dockerignore
 ├── requirements.txt           # what the API needs
 ├── requirements-dev.txt       # + tests and training tools
@@ -204,7 +220,30 @@ uvicorn main:app --reload
 
 Then open http://127.0.0.1:8000.
 
-To re-run the notebook, also install the notebook-only packages (jupyter, matplotlib, seaborn, shap) and keep `model_io.py` next to the notebook (in Colab, upload it first). Use the same library versions as `requirements.txt`, so the saved model loads on the server.
+To open the notebook locally, install `requirements-dev.txt` (it adds SHAP, MLflow, matplotlib and the test tools at fixed versions). To retrain the model, use Docker (next section), so you get exactly the same model file.
+
+---
+
+## Retrain the model (reproducible)
+
+XGBoost gives slightly different models on different operating systems, even with the same code, data, `random_state` and library versions. On Windows and Linux, the same single-threaded model differed by about 0.01 in probability on average. That's enough for the hyperparameter search to pick different settings. So the model is trained inside a fixed Linux image (`Dockerfile.train`: Python 3.13.5, every library pinned):
+
+```bash
+docker build -f Dockerfile.train -t credit-risk-train .
+docker run --rm -v "$PWD:/work" -e GIT_COMMIT=$(git rev-parse --short HEAD) credit-risk-train
+```
+
+This runs every cell of `Credit_Risk.ipynb`, saves the outputs back into it, and writes `credit_risk_model.pkl`, `best_threshold.pkl` and the MLflow run into the project folder. In PowerShell, write `${PWD}` instead of `$PWD`. In Git Bash on Windows, put `MSYS_NO_PATHCONV=1` in front of `docker run` and use `$(pwd -W)` instead of `$PWD`, or Git Bash rewrites the `/work` path.
+
+**Checked:** three training runs (4 CPUs, 16 CPUs, and again after a code change to the plots only) produced **byte-identical** model and threshold files. The deployed model is that file. It matches the earlier Colab model to within 0.00002 in probability, with the same tuned settings, cut-off (0.604) and test scores.
+
+**Browse the MLflow runs** (also from Docker, because MLflow saves the file paths as they are inside the container):
+
+```bash
+docker run --rm -p 5000:5000 -v "$PWD:/work" credit-risk-train mlflow ui --host 0.0.0.0 --backend-store-uri sqlite:///mlflow.db
+```
+
+Then open http://127.0.0.1:5000 and pick **Model training** at the top. `mlflow.db` and `mlruns/` stay on your machine (git-ignored).
 
 ---
 
@@ -252,4 +291,4 @@ To deploy on Render with Docker, create a Web Service from this repo and pick **
 ---
 
 ## Tech stack
-Python 3.13 · pandas · scikit-learn · XGBoost · SHAP · FastAPI · Pydantic · Docker · Render
+Python 3.13 · pandas · scikit-learn · XGBoost · SHAP · MLflow · FastAPI · Pydantic · SQLite · pytest · Docker · Render
