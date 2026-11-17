@@ -16,7 +16,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # Writable cache folders for any user id passed with --user
     HOME=/tmp \
     MPLCONFIGDIR=/tmp/matplotlib \
-    MPLBACKEND=Agg \
     TRAINING_ENV=docker \
     # No git in the image (the commit is passed in as GIT_COMMIT), so MLflow
     # shouldn't warn about it.
