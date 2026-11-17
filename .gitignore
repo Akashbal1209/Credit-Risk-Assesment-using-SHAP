@@ -19,3 +19,6 @@ Thumbs.db
 .vscode/
 
 live link.txt
+
+# Local prediction log (SQLite)
+data/

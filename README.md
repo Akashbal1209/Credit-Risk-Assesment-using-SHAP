@@ -106,7 +106,7 @@ All steps are in `Credit_Risk.ipynb`, one section per step.
 - SHAP explanations for each applicant inside the app
 - Monotonic constraints (for example, a higher interest rate should never lower the risk)
 - Automated tests for the API and the model file
-- Monitoring for data drift after deployment
+- A permanent prediction log (Postgres) and a scheduled drift check
 
 ---
 
@@ -117,6 +117,7 @@ All steps are in `Credit_Risk.ipynb`, one section per step.
 | GET | `/` | Credit risk check web page |
 | GET | `/health` | Status and whether the model is loaded |
 | POST | `/predict` | Default probability, prediction and cut-off for one application; invalid input returns 422 |
+| GET | `/stats` | Summary of logged predictions: total, high-risk rate, average probability, and the same per loan grade |
 
 Example:
 ```bash
@@ -124,6 +125,41 @@ curl -X POST https://credit-risk-assesment-using-shap-08yl.onrender.com/predict 
   -H "Content-Type: application/json" \
   -d '{"person_age": 28, "person_income": 54000, "person_home_ownership": "RENT", "person_emp_length": 4, "loan_intent": "EDUCATION", "loan_grade": "B", "loan_amnt": 12000, "loan_int_rate": 11.4, "cb_person_default_on_file": "N", "cb_person_cred_hist_length": 6}'
 ```
+
+---
+
+## Monitoring: prediction log and data drift
+
+A model is only reliable for the kind of applicants it was trained on. If real traffic starts looking different (lower incomes, higher interest rates), the scores slowly stop meaning what they used to, while the API keeps answering normally. Monitoring catches this.
+
+**1. Prediction log (`db.py`).** Every `/predict` call is saved in a SQLite table with its inputs, probability, decision and cut-off. If the log can't be written, the prediction is still returned and the error is logged. A logging problem never breaks the API.
+
+**2. `/stats`.** SQL queries over the log: total predictions, high-risk rate, average default probability, and the same numbers per loan grade.
+
+**3. Drift check (`drift_check.py`).** Compares every feature in the log with the notebook's training split (same cleaning, same split), using the **Population Stability Index (PSI)**:
+
+| PSI | Status | Meaning |
+|---|---|---|
+| < 0.10 | OK | No real change |
+| 0.10 – 0.25 | WATCH | Some change, keep an eye on it |
+| ≥ 0.25 | DRIFT | Big change: check or retrain the model |
+
+```bash
+python drift_check.py
+```
+
+It exits with code 1 when any feature shows DRIFT, so it can run as a scheduled job. With fewer than 100 logged predictions it doesn't judge drift, because there's too little data to tell drift from noise.
+
+**Tested on two kinds of traffic,** 600 applicants each, sent through the API:
+
+| Traffic | Result |
+|---|---|
+| Random applicants from the test set | All 11 features **OK** (highest PSI 0.023) |
+| Same applicants with income halved and interest rate +4 points | **DRIFT** in exactly `loan_int_rate` (2.79), `person_income` (1.44) and `loan_percent_income` (1.02, because it depends on income). The other 8 stay OK. |
+
+The model is calibrated, so the script also compares the **average predicted default** with the training default rate (21.9%). On normal traffic it was 24.1%. On the shifted traffic it jumped to 61.2%.
+
+> **Limitation:** Render's free plan has a temporary disk, so the log is lost when the service restarts. With Docker, a volume keeps it (see below). For a permanent log on Render, the same table can live in Render's Postgres.
 
 ---
 
@@ -135,6 +171,8 @@ Credit-Risk-Assesment-using-SHAP/
 ├── credit_risk_dataset.csv    # raw data
 ├── main.py                    # FastAPI app: /predict, /health, serves the web page
 ├── model_io.py                # saves/loads the model so it works on any OS
+├── db.py                      # SQLite prediction log + /stats queries
+├── drift_check.py             # compares logged applicants with the training data (PSI)
 ├── credit_risk_model.pkl      # calibrated XGBoost pipeline (preprocessing + model)
 ├── best_threshold.pkl         # decision cut-off (0.604)
 ├── static/
@@ -178,6 +216,12 @@ docker run -p 8000:8000 credit-risk-api
 ```
 
 Then open http://127.0.0.1:8000.
+
+To keep the prediction log when the container is removed or restarted, put it on a volume:
+
+```bash
+docker run -p 8000:8000 -v credit-risk-data:/app/data credit-risk-api
+```
 
 - **Small image:** on Linux, the `xgboost` package also installs NVIDIA's GPU library (~800 MB). The API only predicts on CPU, so the image installs `xgboost-cpu` at the same version instead. Predictions are identical to the last decimal. Compressed image size went from 424 MB to 165 MB.
 - **Only what the API needs:** the notebook, dataset and docs stay out of the image (`.dockerignore`).

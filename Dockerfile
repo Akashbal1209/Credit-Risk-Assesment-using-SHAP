@@ -22,7 +22,7 @@ RUN sed 's/^xgboost==/xgboost-cpu==/' requirements.txt > /tmp/requirements-docke
     && rm /tmp/requirements-docker.txt
 
 # Only what the API needs at runtime (see .dockerignore).
-COPY main.py model_io.py credit_risk_model.pkl best_threshold.pkl ./
+COPY main.py model_io.py db.py credit_risk_model.pkl best_threshold.pkl ./
 COPY static ./static
 
 # Run as a normal user, not root. /app/data holds the prediction log.
