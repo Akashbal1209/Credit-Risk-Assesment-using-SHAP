@@ -162,8 +162,8 @@ Interactive API docs are available at `/docs` when the server is running.
 Requires Python 3.13.
 
 ```bash
-git clone https://github.com/<your-username>/<repo-name>.git
-cd <repo-name>
+git clone git clone https://github.com/Akashbal1209/Credit-Risk-Assesment-using-SHAP.git
+cd Credit-Risk-Assesment-using-SHAP
 python -m venv .venv
 ```
 
@@ -211,6 +211,4 @@ pip install jupyter matplotlib seaborn shap
 - `loan_grade` and `loan_int_rate` are usually set by a lender after its own risk review, so they already carry
   part of the risk signal the model learns from.
 
-## Author
 
-**Aman Raj**
