@@ -1,214 +1,170 @@
-# Credit Risk Assessment System
+# 💳 Credit Risk Assessment — Loan Default Checker
 
-A machine learning web app that estimates the **probability that a loan applicant will default**.
-You fill in the applicant's details in the browser, a FastAPI backend runs a calibrated XGBoost model,
-and the result card shows the default probability, the risk verdict and the cut-off used.
+Estimate the chance that a loan applicant will **default**, and turn that estimate into a simple decision: **low risk or high risk**.
 
-> **Live demo:** <https://credit-risk-assesment-using-shap-08yl.onrender.com>
-> (Free Render instances sleep when idle, so the first request can take up to a minute.)
+🔗 **Live demo:** https://credit-risk-assesment-using-shap-08yl.onrender.com
+📄 **API docs:** https://credit-risk-assesment-using-shap-08yl.onrender.com/docs
+
+> The app runs on Render's free plan. If nobody has used it for a while, the first load can take 30–60 seconds while the server wakes up.
+
+![Credit risk check UI](assets/screenshot.png)
 
 ---
 
-## Features
+## Problem
 
-- **Calibrated XGBoost model** — the probability it shows is close to the real default rate
-  (Brier score improved from 0.0608 to 0.0511 after calibration).
-- **Tuned decision threshold** — chosen on training data only, so the test scores are honest.
-- **Explainability with SHAP** — global feature importance and per-applicant waterfall plots in the notebook.
-- **Strict API validation** — wrong categories, impossible values or impossible combinations
-  (employment longer than age, grade A/B with a prior default) get a `422` instead of a silent bad prediction.
-- **Server-side feature calculation** — `loan_percent_income` is always calculated from loan amount and income,
-  so the client can't send a value that disagrees with them.
-- **Keyboard and screen-reader friendly** — chip groups work with arrow keys, and the hidden side of the card
-  can't be reached with Tab.
-- **Frontend rules taken from the data** — interest rate must sit inside the range seen for the chosen loan grade,
-  and an applicant with a prior default cannot get grade A or B (no such rows exist in the training data).
-- **Cross-platform model file** — the XGBoost part is stored in XGBoost's portable format, so a model trained
-  on Linux also loads on Windows and macOS.
-- **Single deployable service** — FastAPI serves both the `/predict` API and the static frontend.
+A lender has to decide for **every application** whether the applicant is likely to pay the loan back.
 
-## Tech Stack
+- **Approving a defaulter**: the lender loses the money it lent.
+- **Rejecting a good applicant**: the lender loses a paying customer.
 
-| Layer      | Tools |
-|------------|-------|
-| ML         | scikit-learn (Pipeline, ColumnTransformer, CalibratedClassifierCV), XGBoost, SHAP |
-| Data       | pandas, NumPy, Matplotlib, Seaborn |
-| Backend    | FastAPI, Pydantic, Uvicorn, joblib |
-| Frontend   | HTML, CSS, vanilla JavaScript |
-| Deployment | Render |
+A plain yes/no is not enough for this decision. The lender also needs to know **how likely** a default is, and that number has to be trustworthy. So this project gives a **calibrated probability** and a cut-off for each application:
 
-## Project Structure
+| In the app | What it means | Model output |
+|---|---|---|
+| **Chance of default** | How likely this applicant is to default; 30% should really mean about 3 in 10 | Calibrated probability |
+| **High risk / Low risk** | High risk when the chance of default is at or above the cut-off | Probability ≥ 60.4% |
+| **Marker on the ring** | Where the cut-off sits, so you can see how far the applicant is from it | Decision threshold |
 
-```
-.
-├── main.py                  # FastAPI app: /predict, /health, serves the frontend
-├── model_io.py              # Saves/loads the model in a format that works on any OS
-├── credit_risk_model.pkl    # Calibrated XGBoost pipeline (preprocessing + model)
-├── best_threshold.pkl       # Decision threshold for "High Risk"
-├── Credit_Risk.ipynb        # Full workflow: EDA → cleaning → training → tuning → calibration → SHAP
-├── credit_risk_dataset.csv  # Training data
-├── requirements.txt
-├── .python-version
-└── static/
-    ├── index.html
-    ├── style.css
-    └── script.js
-```
+---
 
 ## Dataset
 
-[Credit Risk Dataset (Kaggle)](https://www.kaggle.com/datasets/laotse/credit-risk-dataset) — 32,581 loan records, 11 input features and one target.
+**Credit Risk Dataset**, Kaggle
+https://www.kaggle.com/datasets/laotse/credit-risk-dataset
 
-| Column | Meaning |
-|--------|---------|
-| `person_age` | Applicant age |
-| `person_income` | Annual income |
-| `person_home_ownership` | RENT / OWN / MORTGAGE / OTHER |
-| `person_emp_length` | Employment length in years |
-| `loan_intent` | EDUCATION / MEDICAL / VENTURE / PERSONAL / DEBTCONSOLIDATION / HOMEIMPROVEMENT |
-| `loan_grade` | A (best) to G (worst) |
-| `loan_amnt` | Loan amount |
-| `loan_int_rate` | Interest rate (%) |
-| `loan_percent_income` | Loan amount ÷ income |
-| `cb_person_default_on_file` | Prior default on record (Y / N) |
-| `cb_person_cred_hist_length` | Credit history length in years |
-| **`loan_status`** | **Target — 1 = defaulted, 0 = repaid** |
+- **32,581 loan applications**, each with **11 input features** and the outcome (`loan_status`: 1 = defaulted, 0 = repaid).
+- Features: age, income, home ownership, employment length, loan purpose, loan grade (A–G), loan amount, interest rate, loan as a share of income, prior default on file, and credit history length.
+- The target is **imbalanced**: about **22%** of applicants defaulted.
+- Missing values: `person_emp_length` (895 rows) and `loan_int_rate` (3,116 rows).
 
-The target is imbalanced: about 22% of applicants defaulted.
+The raw file is included in this repo at `credit_risk_dataset.csv`.
 
-## ML Workflow
+---
 
-1. **EDA** — data types, missing values (`person_emp_length`, `loan_int_rate`), class balance, outliers, correlations.
-2. **Cleaning** — removed 165 duplicate rows, ages outside 18–100, employment length above 60 or above age,
-   and non-positive income or loan amount. Rows with missing values are kept and imputed inside the pipeline.
-   32,409 rows remain.
-3. **Split** — 80/20 stratified train-test split.
-4. **Class imbalance** — `class_weight="balanced"` for Logistic Regression, `scale_pos_weight` (≈3.57) for XGBoost.
-5. **Preprocessing pipelines** — median imputation (+ scaling for Logistic Regression) for numeric columns,
-   constant imputation + one-hot encoding for categorical columns. Everything lives inside one sklearn
-   `Pipeline`, so the API sends raw values and gets the same preprocessing as training.
-6. **5-fold stratified cross-validation** — Logistic Regression baseline vs XGBoost.
-7. **Hyperparameter tuning** — `RandomizedSearchCV`, 150 candidates × 5 folds, optimising average precision.
-8. **Probability calibration** — sigmoid (Platt) scaling with `CalibratedClassifierCV`.
-9. **Threshold selection** — out-of-fold predictions on the training set, threshold with the best F1 score.
-   The test set is not used for this step.
-10. **Explainability** — SHAP summary plot (global) and waterfall plot (single applicant).
-11. **Error analysis** — false positives vs false negatives on the test set.
+## Approach
 
-## Results (test set: 6,482 applicants, 1,418 defaults)
+All steps are in `Credit_Risk.ipynb`, one section per step.
 
-| Model | Threshold | ROC-AUC | Precision | Recall | F1 | Accuracy |
-|-------|-----------|---------|-----------|--------|----|----------|
-| Logistic Regression (baseline) | 0.5 | 0.872 | 0.539 | 0.782 | 0.638 | 0.806 |
-| XGBoost (tuned) | 0.5 | 0.954 | 0.840 | 0.807 | 0.823 | 0.924 |
-| **XGBoost (tuned + calibrated) — deployed** | **0.604** | **0.953** | **0.957** | **0.758** | **0.846** | **0.940** |
+### 1. Cleaning (sections 2–3)
+- Removed **165** exact duplicate rows.
+- Removed impossible ages (outside 18–100), for example an age of 144.
+- Removed employment length above 60 years or above the applicant's age.
+- Removed rows with income or loan amount ≤ 0.
+- **Kept rows with missing values.** They are filled in inside the model pipeline. A plain `emp_length <= age` filter would silently drop every row with a missing employment length, because a comparison with NaN is always false.
+- Result: **32,409 rows**.
 
-At the deployed threshold the model makes 48 false positives (safe applicants flagged) and 343 false negatives
-(defaulters missed). A lender who cares more about catching defaulters can lower the threshold to trade
-precision for recall.
+### 2. Split, imbalance and preprocessing (sections 4–6)
+- **80/20 stratified train-test split**, so both parts have the same share of defaulters.
+- Class imbalance: `class_weight="balanced"` for Logistic Regression and `scale_pos_weight` (≈3.57) for XGBoost.
+- Preprocessing lives **inside one scikit-learn `Pipeline`**: median imputation for numbers (plus scaling for Logistic Regression), constant imputation + one-hot encoding for categories. The API sends raw values and gets exactly the same preprocessing as training.
+
+### 3. Honest evaluation setup (sections 7–8)
+- **5-fold stratified cross-validation** on the training data for every comparison and tuning decision.
+- The **test set (6,482 applicants)** is used **once**, at the very end.
+- The decision threshold is also picked **without the test set** (see step 5).
+
+### 4. Model (sections 9–10)
+- **Baseline:** Logistic Regression.
+- **Main model:** XGBoost, tuned with `RandomizedSearchCV` (150 candidates × 5 folds), optimising **average precision**, with a fixed `random_state` so every run gives the same model.
+
+### 5. Calibration and threshold (sections 12–13)
+- **Sigmoid (Platt) calibration** with `CalibratedClassifierCV`, so the probability matches the real default rate. Brier score improved from **0.0608 to 0.0511**.
+- **Threshold:** out-of-fold predictions on the **training data**, then the threshold with the best F1 score: **0.604**.
+
+### 6. Explainability and error analysis (sections 14–15)
+- **SHAP** summary plot shows which features drive the predictions overall.
+- **SHAP waterfall** plot shows why one applicant got their score.
+- False positives and false negatives on the test set are compared to see where the model is weak.
+
+### 7. Saving the model (section 16)
+- Saved with `model_io.save_portable`. A plain pickle of an XGBoost model trained on Linux fails to load on Windows (`XGBoostError: input stream corrupted`). The XGBoost part is stored in XGBoost's portable format instead, so the same file loads on **Linux, Windows and macOS**.
+
+---
+
+## Results (held-out test set, 6,482 applicants, 1,418 defaults)
+
+| Metric | Logistic Regression (cut-off 0.5) | **XGBoost, calibrated (cut-off 0.604)** |
+|---|---|---|
+| ROC-AUC | 0.872 | **0.953** |
+| Precision | 0.539 | **0.957** |
+| Recall | 0.782 | 0.758 |
+| F1 | 0.638 | **0.846** |
+| Accuracy | 0.806 | **0.940** |
+
+**Business result:** at the deployed cut-off the model catches **1,075 of 1,418 defaulters (75.8%)** and wrongly flags only **48 of 5,064 good applicants (under 1%)**. When it says "high risk", it is right **95.7%** of the time.
+
+### Limitations (being honest)
+- **About 1 in 4 defaulters is missed** (343 false negatives). The cut-off maximises F1; a lender who cares more about catching defaulters can lower it and accept more false alarms.
+- **The cut-off is not based on real costs.** A real lender would pick it from the cost of a default vs the profit from a good loan.
+- **`loan_grade` and `loan_int_rate` are set by the lender** after its own risk review, so they already carry part of the risk signal.
+- **One public dataset only.** The model is not validated on real lending data from any institution.
+- No applicant with a prior default has grade A or B in the data, so the app does not allow that combination.
+
+### Future work
+- A cost-based threshold instead of the best-F1 threshold
+- SHAP explanations for each applicant inside the app
+- Monotonic constraints (for example, a higher interest rate should never lower the risk)
+- Automated tests for the API and the model file
+- Monitoring for data drift after deployment
+
+---
 
 ## API
 
-### `POST /predict`
+| Method | Endpoint | What it does |
+|---|---|---|
+| GET | `/` | Credit risk check web page |
+| GET | `/health` | Status and whether the model is loaded |
+| POST | `/predict` | Default probability, prediction and cut-off for one application; invalid input returns 422 |
 
-Request:
-
-```json
-{
-  "person_age": 28,
-  "person_income": 54000,
-  "person_home_ownership": "RENT",
-  "person_emp_length": 4,
-  "loan_intent": "EDUCATION",
-  "loan_grade": "B",
-  "loan_amnt": 12000,
-  "loan_int_rate": 11.4,
-  "cb_person_default_on_file": "N",
-  "cb_person_cred_hist_length": 6
-}
-```
-
-Response:
-
-```json
-{
-  "default_probability": 0.384,
-  "default_prediction": 0,
-  "threshold": 0.604,
-  "Result": "Low Risk"
-}
-```
-
-`default_prediction` is `1` (High Risk) when `default_probability >= threshold`.
-
-`loan_percent_income` is calculated on the server as `round(loan_amnt / person_income, 2)`. It may be sent,
-but the sent value is ignored.
-
-Invalid input returns `422` with the reason, for example:
-
-- a category outside the training data (such as `loan_grade: "Z"`)
-- a value out of range (such as `person_age: 15`)
-- `person_emp_length` greater than `person_age`
-- `loan_grade` A or B together with `cb_person_default_on_file: "Y"`
-
-### `GET /health`
-
-Returns `{"status": "ok", "model_loaded": true}`.
-
-Interactive API docs are available at `/docs` when the server is running.
-
-## Run Locally
-
-Requires Python 3.13.
-
+Example:
 ```bash
-git clone git clone https://github.com/Akashbal1209/Credit-Risk-Assesment-using-SHAP.git
+curl -X POST https://credit-risk-assesment-using-shap-08yl.onrender.com/predict \
+  -H "Content-Type: application/json" \
+  -d '{"person_age": 28, "person_income": 54000, "person_home_ownership": "RENT", "person_emp_length": 4, "loan_intent": "EDUCATION", "loan_grade": "B", "loan_amnt": 12000, "loan_int_rate": 11.4, "cb_person_default_on_file": "N", "cb_person_cred_hist_length": 6}'
+```
+
+---
+
+## Project structure
+
+```
+Credit-Risk-Assesment-using-SHAP/
+├── Credit_Risk.ipynb          # EDA, cleaning, training, tuning, calibration, threshold, SHAP
+├── credit_risk_dataset.csv    # raw data
+├── main.py                    # FastAPI app: /predict, /health, serves the web page
+├── model_io.py                # saves/loads the model so it works on any OS
+├── credit_risk_model.pkl      # calibrated XGBoost pipeline (preprocessing + model)
+├── best_threshold.pkl         # decision cut-off (0.604)
+├── static/
+│   ├── index.html             # credit risk check UI
+│   ├── style.css
+│   └── script.js
+├── assets/screenshot.png
+├── requirements.txt
+├── runtime.txt
+└── .python-version            # 3.13.5
+```
+
+---
+
+## Run it locally (Windows / PowerShell)
+
+```powershell
+git clone https://github.com/Akashbal1209/Credit-Risk-Assesment-using-SHAP.git
 cd Credit-Risk-Assesment-using-SHAP
-python -m venv .venv
-```
-
-Activate the virtual environment:
-
-- Windows (PowerShell): `.venv\Scripts\Activate.ps1`
-- macOS / Linux: `source .venv/bin/activate`
-
-Install and start:
-
-```bash
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-Open http://127.0.0.1:8000 for the app, or http://127.0.0.1:8000/docs for the API docs.
+Then open http://127.0.0.1:8000.
 
-## Retrain the Model
+To re-run the notebook, also install the notebook-only packages (jupyter, matplotlib, seaborn, shap) and keep `model_io.py` next to the notebook (in Colab, upload it first). Use the same library versions as `requirements.txt`, so the saved model loads on the server.
 
-Open `Credit_Risk.ipynb` (Jupyter or Google Colab), keep `credit_risk_dataset.csv` and `model_io.py` next to it
-(in Colab, upload both) and run all cells. The last two cells write `credit_risk_model.pkl` and `best_threshold.pkl`.
-Copy both into the project root.
+---
 
-The model is saved with `model_io.save_portable` instead of a plain pickle. A plain pickle of an XGBoost model
-trained on Linux (such as Colab) fails to load on Windows with `XGBoostError: input stream corrupted`;
-the portable file loads on Linux, Windows and macOS.
-Train with the same library versions as `requirements.txt`, otherwise the pickle may not load on the server.
-The notebook also needs a few extra packages that the server does not:
-
-```bash
-pip install -r requirements.txt
-pip install jupyter matplotlib seaborn shap
-```
-
-## Deploy on Render
-
-- **Build command:** `pip install -r requirements.txt`
-- **Start command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
-- **Health check path:** `/health`
-
-## Limitations
-
-- Trained on one public dataset; it is not validated on real lending data from any institution.
-- The model output is meant to support a decision, not to make one on its own.
-- `loan_grade` and `loan_int_rate` are usually set by a lender after its own risk review, so they already carry
-  part of the risk signal the model learns from.
-
-
+## Tech stack
+Python 3.13 · pandas · scikit-learn · XGBoost · SHAP · FastAPI · Pydantic · Render
