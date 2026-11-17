@@ -105,7 +105,6 @@ All steps are in `Credit_Risk.ipynb`, one section per step.
 - A cost-based threshold instead of the best-F1 threshold
 - SHAP explanations for each applicant inside the app
 - Monotonic constraints (for example, a higher interest rate should never lower the risk)
-- Automated tests for the API and the model file
 - A permanent prediction log (Postgres) and a scheduled drift check
 
 ---
@@ -180,9 +179,12 @@ Credit-Risk-Assesment-using-SHAP/
 │   ├── style.css
 │   └── script.js
 ├── assets/screenshot.png
+├── tests/                     # pytest: API, model file, drift check
+├── pytest.ini
 ├── Dockerfile                 # container for the API
 ├── .dockerignore
-├── requirements.txt
+├── requirements.txt           # what the API needs
+├── requirements-dev.txt       # + tests and training tools
 ├── runtime.txt
 └── .python-version            # 3.13.5
 ```
@@ -203,6 +205,22 @@ uvicorn main:app --reload
 Then open http://127.0.0.1:8000.
 
 To re-run the notebook, also install the notebook-only packages (jupyter, matplotlib, seaborn, shap) and keep `model_io.py` next to the notebook (in Colab, upload it first). Use the same library versions as `requirements.txt`, so the saved model loads on the server.
+
+---
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+37 tests in `tests/`:
+- **API (`test_api.py`):** `/health`, the web page, the response format, the trained cut-off, fixed applicants with known scores, `loan_percent_income` being recalculated, 12 kinds of invalid input that must return 422, the prediction log and `/stats`, and the API still answering when the log can't be written.
+- **Model file (`test_model_file.py`):** the file loads with its portable XGBoost boosters, handles missing values, and saving then loading gives identical predictions.
+- **Drift check (`test_drift.py`):** the training split matches the notebook (25,927 rows), PSI is near 0 for the same data and high for shifted data, the status bands, and the exit codes.
+
+**The tests were checked against planted bugs**, to make sure they catch real mistakes: allowing grade B after a prior default, falling back to a 0.5 cut-off, and miscounting high-risk applicants per grade. Each one makes a test fail.
 
 ---
 

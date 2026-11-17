@@ -1,0 +1,7 @@
+# Everything the API needs, plus tools for testing and training.
+# The API itself (and the Docker image) only uses requirements.txt.
+-r requirements.txt
+
+# Tests
+pytest==9.2.0
+httpx==0.28.1
