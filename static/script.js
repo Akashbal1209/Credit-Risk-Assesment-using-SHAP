@@ -95,7 +95,8 @@
           `radial-gradient(circle at ${gx}% ${gy}%, rgba(255,255,255,0.12), transparent 55%)`;
       }
     });
-    document.addEventListener("mouseleave", () => {
+    // documentElement, not document: Firefox never fires mouseleave on document.
+    document.documentElement.addEventListener("mouseleave", () => {
       tilt.style.transform = "";
       mx = my = 0.5;
     });
@@ -106,13 +107,14 @@
   /* ---------- Grade rules (taken from credit_risk_dataset.csv) ---------- */
   // Interest rate range per grade: 1st to 99th percentile of the training data,
   // so a few outlier rows (e.g. 6.0% on grade D) don't widen the range.
+  // Low end rounded down and high end rounded up, so no real value is cut off.
   const RATE_RANGES = {
-    A: [5.4, 9.6],
-    B: [8.9, 12.7],
+    A: [5.4, 9.7],
+    B: [8.8, 12.7],
     C: [10.9, 16.0],
-    D: [12.5, 18.3],
-    E: [14.1, 19.9],
-    F: [15.4, 21.7],
+    D: [12.4, 18.3],
+    E: [14.0, 20.0],
+    F: [15.3, 21.8],
     G: [17.9, 22.8],
   };
   // No applicant with a prior default has grade A or B in the training data.
@@ -120,21 +122,48 @@
   const FIRST_GRADE_AFTER_DEFAULT = "C";
 
   /* ---------- Chip groups (radio behaviour) ---------- */
+  // Standard radio-group keyboard pattern: only the selected chip is a Tab stop,
+  // arrow keys move the selection inside the group (disabled chips are skipped).
   function selectChip(group, btn) {
     group.querySelectorAll("button").forEach((b) => {
       const on = b === btn;
       b.classList.toggle("on", on);
       b.setAttribute("aria-checked", String(on));
+      b.tabIndex = on ? 0 : -1;
     });
   }
 
+  function onChipChange(group) {
+    if (group.id === "cb_person_default_on_file") applyDefaultRule();
+    if (group.id === "loan_grade") onGradeChange();
+  }
+
   document.querySelectorAll(".chips").forEach((group) => {
+    selectChip(group, group.querySelector("button.on"));
+
     group.addEventListener("click", (e) => {
       const btn = e.target.closest("button");
       if (!btn || btn.disabled) return;
       selectChip(group, btn);
-      if (group.id === "cb_person_default_on_file") applyDefaultRule();
-      if (group.id === "loan_grade") onGradeChange();
+      onChipChange(group);
+    });
+
+    group.addEventListener("keydown", (e) => {
+      const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
+      if (!keys.includes(e.key)) return;
+      e.preventDefault();
+      const enabled = [...group.querySelectorAll("button")].filter((b) => !b.disabled);
+      const i = enabled.indexOf(group.querySelector("button.on"));
+      let next;
+      if (e.key === "Home") next = enabled[0];
+      else if (e.key === "End") next = enabled[enabled.length - 1];
+      else {
+        const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+        next = enabled[(i + step + enabled.length) % enabled.length];
+      }
+      selectChip(group, next);
+      next.focus();
+      onChipChange(group);
     });
   });
   const chipValue = (id) => $(id).querySelector("button.on").dataset.value;
@@ -297,7 +326,9 @@
         let detail = "";
         try {
           const j = await res.json();
-          detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+          // FastAPI sends a string for HTTPException and a list of {msg} for validation errors.
+          if (typeof j.detail === "string") detail = j.detail;
+          else if (Array.isArray(j.detail) && j.detail.length) detail = j.detail[0].msg;
         } catch (_) { /* ignore */ }
         const e = new Error(detail || `Server returned ${res.status}`);
         e.status = res.status;
@@ -307,6 +338,14 @@
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /* ---------- Which side of the card is active ---------- */
+  // `inert` hides the turned-away side from the Tab key and screen readers,
+  // so keyboard users can't land on buttons they can't see.
+  function showFace(name) {
+    $("front").inert = name !== "front";
+    $("back").inert = name !== "back";
   }
 
   /* ---------- Result rendering ---------- */
@@ -347,7 +386,7 @@
     bars.forEach(([f, t, , text]) => { $(t).textContent = text; });
 
     card.classList.add("flipped");
-    $("back").setAttribute("aria-hidden", "false");
+    showFace("back");
 
     requestAnimationFrame(() => requestAnimationFrame(() => {
       ring.style.strokeDashoffset = CIRC * (1 - p);
@@ -392,7 +431,7 @@
       loan_grade: grade,
       loan_amnt: v.loan_amnt,
       loan_int_rate: v.loan_int_rate,
-      loan_percent_income: Math.round((v.loan_amnt / v.person_income) * 100) / 100,
+      // loan_percent_income is calculated on the server from loan_amnt and person_income.
       cb_person_default_on_file: chipValue("cb_person_default_on_file"),
       cb_person_cred_hist_length: v.cb_person_cred_hist_length,
     };
@@ -421,7 +460,7 @@
       let msg;
       if (err.name === "AbortError") msg = "The server took too long to respond. Try again in a moment.";
       else if (err instanceof TypeError) msg = "Can't reach the server. Check your connection and try again.";
-      else if (err.status === 422) msg = "The server rejected one of the values. Check the form and try again.";
+      else if (err.status === 422) msg = `The server rejected one of the values: ${err.message}`;
       else msg = "Something went wrong on the server. Try again.";
       setStatus(msg, true);
       console.error("Prediction failed:", err);
@@ -438,13 +477,13 @@
   /* ---------- Back to the form ---------- */
   $("edit").addEventListener("click", () => {
     card.classList.remove("flipped");
-    $("back").setAttribute("aria-hidden", "true");
+    showFace("front");
     glow.classList.remove("ok", "bad");
     tint = "124,131,255";
     if (reduceMotion) frame();
     setTimeout(() => $("person_age").focus({ preventScroll: true }), 700);
   });
 
-  $("back").setAttribute("aria-hidden", "true");
+  showFace("front");
   applyDefaultRule(); // sets the initial grade state and the interest hint
 })();

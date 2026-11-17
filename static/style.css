@@ -87,7 +87,9 @@ body {
   width: 100%;
   max-width: 560px;
   perspective: 1200px;
-  animation: rise 0.9s 0.1s ease both;
+  /* "backwards", not "both": a finished animation that keeps its end value
+     (transform: none) would override the pointer tilt set from script.js. */
+  animation: rise 0.9s 0.1s ease backwards;
 }
 
 @keyframes rise {
