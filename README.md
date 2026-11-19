@@ -15,15 +15,17 @@ Estimate the chance that a loan applicant will **default**, and turn that estima
 
 A lender has to decide for **every application** whether the applicant is likely to pay the loan back.
 
-- **Approving a defaulter**: the lender loses the money it lent.
-- **Rejecting a good applicant**: the lender loses a paying customer.
+- **Approving a defaulter**: the lender loses a big part of the money it lent.
+- **Rejecting a good applicant**: the lender loses only the interest it would have earned.
 
-A plain yes/no is not enough for this decision. The lender also needs to know **how likely** a default is, and that number has to be trustworthy. So this project gives a **calibrated probability** and a cut-off for each application:
+These two mistakes don't cost the same. On a 10,000 loan at 11%, a default loses about 6,000, while a wrongly rejected good customer costs about 1,100 in interest.
+
+A plain yes/no is not enough for this decision. The lender also needs to know **how likely** a default is, and that number has to be trustworthy. So this project gives a **calibrated probability** and a **cut-off picked to maximise the lender's profit**:
 
 | In the app | What it means | Model output |
 |---|---|---|
 | **Chance of default** | How likely this applicant is to default; 30% should really mean about 3 in 10 | Calibrated probability |
-| **High risk / Low risk** | High risk when the chance of default is at or above the cut-off | Probability ≥ 60.4% |
+| **High risk / Low risk** | High risk when the chance of default is at or above the cut-off | Probability ≥ 17.0% |
 | **Marker on the ring** | Where the cut-off sits, so you can see how far the applicant is from it | Decision threshold |
 
 ---
@@ -68,11 +70,14 @@ All steps are in `Credit_Risk.ipynb`, one section per step.
 - **Baseline:** Logistic Regression.
 - **Main model:** XGBoost, tuned with `RandomizedSearchCV` (150 candidates × 5 folds), optimising **average precision**, with a fixed `random_state`.
 - **Each XGBoost model trains on one thread (`n_jobs=1`).** A fixed `random_state` alone is not enough: the same XGBoost model trained with 2 threads and with 16 threads gave probabilities up to **0.30 apart**. With one thread per model, the result no longer depends on the number of cores: on Linux, 2 and 8 CPUs gave identical predictions. The search still trains many candidates in parallel, so it isn't slower.
-- **The operating system matters too.** Even with one thread, re-running the notebook on Windows made the search pick different settings and a cut-off of 0.529 instead of 0.604. That's why the model is trained in a fixed Linux Docker image (see "Retrain the model").
+- **The operating system matters too.** Even with one thread, re-running the notebook on Windows made the search pick different settings and a best-F1 cut-off of 0.529 instead of 0.604. That's why the model is trained in a fixed Linux Docker image (see "Retrain the model").
 
 ### 5. Calibration and threshold (sections 12–13)
 - **Sigmoid (Platt) calibration** with `CalibratedClassifierCV`, so the probability matches the real default rate. Brier score improved from **0.0608 to 0.0511**.
-- **Threshold:** out-of-fold predictions on the **training data**, then the threshold with the best F1 score: **0.604**.
+- **Threshold, picked on out-of-fold predictions of the training data** (the test set stays unseen):
+  - **Best F1: 0.604.** F1 treats both mistakes as equally bad. Kept for comparison.
+  - **Maximum profit: 0.170 (deployed).** For each applicant: approving a defaulter loses **60% of the loan** (LGD, loss given default), and rejecting a good payer loses **one year of interest** (interest rate × loan amount). The cut-off is the one with the highest total net profit. A missing interest rate is filled with the median rate of the applicant's loan grade.
+  - As a sanity check, the break-even point for a typical loan is interest ÷ (interest + LGD) ≈ 0.11 ÷ 0.71 ≈ 0.155, close to the 0.170 found in the data.
 
 ### 6. Explainability and error analysis (sections 14–15)
 - **SHAP** summary plot shows which features drive the predictions overall.
@@ -89,36 +94,61 @@ All steps are in `Credit_Risk.ipynb`, one section per step.
 ### 9. Experiment tracking (section 18)
 - Every training run is logged to **MLflow**: one parent run (git commit, dataset fingerprint, library versions, OS) with a child run per model.
 - Child runs: Logistic Regression baseline, untuned XGBoost, tuned XGBoost (with all 150 search candidates as a table), and the final calibrated model.
-- The final run stores its parameters, test scores with confidence intervals, the confusion matrix counts, the calibration and SHAP plots, and **the exact model files the API loads**.
+- The final run stores its parameters (including the cost assumptions), test scores with confidence intervals, the confusion matrix counts, net profit for each decision rule, the LGD sensitivity table, the calibration and SHAP plots, and **the exact model files the API loads**.
 
 ---
 
 ## Results (held-out test set, 6,482 applicants, 1,418 defaults)
 
-| Metric | Logistic Regression (cut-off 0.5) | **XGBoost, calibrated (cut-off 0.604)** | XGBoost 95% CI |
-|---|---|---|---|
-| ROC-AUC | 0.872 | **0.953** | 0.946 – 0.960 |
-| Precision | 0.539 | **0.957** | 0.945 – 0.968 |
-| Recall | 0.782 | 0.758 | 0.735 – 0.782 |
-| F1 | 0.638 | **0.846** | 0.831 – 0.862 |
-| Accuracy | 0.806 | **0.940** | 0.934 – 0.946 |
-| Brier score (lower is better) | 0.139 | **0.051** | 0.047 – 0.055 |
+### Money: which cut-off earns the most?
 
-The intervals come from 1,000 bootstrap resamples of the test set (notebook section 17).
+Net profit on the test set = interest earned on approved good loans − money lost on approved defaulters (LGD 60%, 1-year term). Amounts are in the dataset's currency.
 
-**Is XGBoost really better?** On the same 1,000 resamples, the difference stays on XGBoost's side for ROC-AUC (+0.082, CI +0.073 to +0.090), F1 (+0.208, CI +0.191 to +0.226), precision, accuracy and Brier score. So it is better, not lucky on this split. **The one exception is recall:** Logistic Regression at its 0.5 cut-off catches slightly more defaulters (difference −0.024, CI −0.043 to −0.004). It pays for that with about 950 false alarms, against 48 for XGBoost.
+| Decision rule | Approved | Rejected | Defaulters approved | Good applicants rejected | **Net profit** |
+|---|---|---|---|---|---|
+| Approve everyone | 6,482 | 0 | 1,418 | 0 | −4.32 million |
+| Best-F1 cut-off (0.604) | 5,359 | 1,123 | 343 | 48 | 3.07 million |
+| **Max-profit cut-off (0.170, deployed)** | 4,718 | 1,764 | **189** | 535 | **3.33 million** |
+| Perfect model (knows the future) | 5,064 | 1,418 | 0 | 0 | 5.00 million |
 
-**Business result:** at the deployed cut-off the model catches **1,075 of 1,418 defaulters (75.8%)** and wrongly flags only **48 of 5,064 good applicants (under 1%)**. When it says "high risk", it is right **95.7%** of the time.
+- **The max-profit cut-off earns 259,000 more** than the best-F1 cut-off (**+8.4%**). On 1,000 bootstrap resamples, the gain stays between **91,000 and 431,000** (95% CI), so it is a real gain, not luck.
+- It rejects more good applicants (535 instead of 48), but lets through far fewer defaulters (189 instead of 343). Each default costs much more than one customer's interest, so this trade pays off.
+- **The LGD assumption changes the cut-off, but the conclusion holds.** Each cut-off is picked on the training data:
+
+| LGD | Max-profit cut-off | Rejected (test) | Net profit (test) | Net profit with best-F1 cut-off |
+|---|---|---|---|---|
+| 40% | 0.248 | 23.7% | 3.75 million | 3.69 million |
+| **60% (deployed)** | **0.170** | **27.2%** | **3.33 million** | 3.07 million |
+| 80% | 0.132 | 29.8% | 2.99 million | 2.45 million |
+| 100% | 0.077 | 36.4% | 2.62 million | 1.83 million |
+
+### Model scores
+
+| Metric | Logistic Regression (cut-off 0.5) | XGBoost, best-F1 cut-off (0.604) | **XGBoost, max-profit cut-off (0.170, deployed)** | Deployed 95% CI |
+|---|---|---|---|---|
+| ROC-AUC | 0.872 | 0.953 | **0.953** | 0.946 – 0.960 |
+| Precision | 0.539 | 0.957 | **0.697** | 0.675 – 0.718 |
+| Recall | 0.782 | 0.758 | **0.867** | 0.849 – 0.884 |
+| F1 | 0.638 | 0.846 | **0.772** | 0.755 – 0.788 |
+| Accuracy | 0.806 | 0.940 | **0.888** | 0.880 – 0.895 |
+| Brier score (lower is better) | 0.139 | 0.051 | **0.051** | 0.047 – 0.055 |
+
+ROC-AUC and Brier score don't depend on the cut-off. The F1 and accuracy of the deployed cut-off are lower than at the best-F1 cut-off **on purpose**: those metrics count every mistake the same, while the lender doesn't. The intervals come from 1,000 bootstrap resamples of the test set (notebook section 17).
+
+**Is XGBoost really better than Logistic Regression?** Yes, on every metric. On the same 1,000 resamples, the deployed XGBoost beats Logistic Regression in ROC-AUC (+0.082, CI +0.073 to +0.090), recall (+0.085, CI +0.066 to +0.104), precision (+0.158, CI +0.139 to +0.177), F1 (+0.134, CI +0.119 to +0.151), accuracy and Brier score. It catches 120 more defaulters (1,229 vs about 1,109) **and** raises fewer false alarms (535 vs about 950).
+
+**Business result:** at the deployed cut-off the model catches **1,229 of 1,418 defaulters (86.7%)** and wrongly flags **535 of 5,064 good applicants (10.6%)**. When it says "high risk", it is right **69.7%** of the time.
 
 ### Limitations (being honest)
-- **About 1 in 4 defaulters is missed** (343 false negatives). The cut-off maximises F1; a lender who cares more about catching defaulters can lower it and accept more false alarms.
-- **The cut-off is not based on real costs.** A real lender would pick it from the cost of a default vs the profit from a good loan.
+- **The costs are assumptions.** LGD 60% and a 1-year term are typical values, not this lender's real numbers. The table above shows how the cut-off moves if they change. A real lender would also count funding and operating costs.
+- **The max-profit cut-off is strict.** It rejects 27% of applicants, against 17% for the best-F1 cut-off. About 1 in 10 good applicants is turned away, which a real lender would weigh against customer growth.
+- **About 1 in 7 defaulters is still missed** (189 false negatives).
 - **`loan_grade` and `loan_int_rate` are set by the lender** after its own risk review, so they already carry part of the risk signal.
 - **One public dataset only.** The model is not validated on real lending data from any institution.
 - No applicant with a prior default has grade A or B in the data, so the app does not allow that combination.
 
 ### Future work
-- A cost-based threshold instead of the best-F1 threshold
+- A cut-off per applicant (break-even by interest rate) instead of one cut-off for everyone
 - SHAP explanations for each applicant inside the app
 - Monotonic constraints (for example, a higher interest rate should never lower the risk)
 - A permanent prediction log (Postgres) and a scheduled drift check
@@ -189,7 +219,7 @@ Credit-Risk-Assesment-using-SHAP/
 ├── db.py                      # SQLite prediction log + /stats queries
 ├── drift_check.py             # compares logged applicants with the training data (PSI)
 ├── credit_risk_model.pkl      # calibrated XGBoost pipeline (preprocessing + model)
-├── best_threshold.pkl         # decision cut-off (0.604)
+├── best_threshold.pkl         # decision cut-off (0.170, max profit)
 ├── static/
 │   ├── index.html             # credit risk check UI
 │   ├── style.css
@@ -227,7 +257,7 @@ To open the notebook locally, install `requirements-dev.txt` (it adds SHAP, MLfl
 
 ## Retrain the model (reproducible)
 
-XGBoost gives slightly different models on different operating systems, even with the same code, data, `random_state` and library versions. On Windows and Linux, the same single-threaded model differed by about 0.01 in probability on average. That's enough for the hyperparameter search to pick different settings: the full notebook on Windows chose another candidate and a cut-off of 0.529, against 0.604 on Linux. So the model is trained inside a fixed Linux image (`Dockerfile.train`: Python 3.13.5, every library pinned):
+XGBoost gives slightly different models on different operating systems, even with the same code, data, `random_state` and library versions. On Windows and Linux, the same single-threaded model differed by about 0.01 in probability on average. That's enough for the hyperparameter search to pick different settings: the full notebook on Windows chose another candidate and a best-F1 cut-off of 0.529, against 0.604 on Linux. So the model is trained inside a fixed Linux image (`Dockerfile.train`: Python 3.13.5, every library pinned):
 
 ```bash
 docker build -f Dockerfile.train -t credit-risk-train .
@@ -236,7 +266,7 @@ docker run --rm -v "$PWD:/work" -e GIT_COMMIT=$(git rev-parse --short HEAD) cred
 
 This runs every cell of `Credit_Risk.ipynb`, saves the outputs back into it, and writes `credit_risk_model.pkl`, `best_threshold.pkl` and the MLflow run into the project folder. In PowerShell, write `${PWD}` instead of `$PWD`. In Git Bash on Windows, put `MSYS_NO_PATHCONV=1` in front of `docker run` and use `$(pwd -W)` instead of `$PWD`, or Git Bash rewrites the `/work` path.
 
-**Checked:** three training runs (4 CPUs, 16 CPUs, and again after a code change to the plots only) produced **byte-identical** model and threshold files. The deployed model is that file. It matches the earlier Colab model to within 0.00002 in probability, with the same tuned settings, cut-off (0.604) and test scores.
+**Checked:** every training run (on 4 and 16 CPUs, and after later code changes) produced a **byte-identical** model file, and repeated runs of the same code produced byte-identical threshold files. The deployed model is that file. It matches the earlier Colab model to within 0.00002 in probability, with the same tuned settings, best-F1 cut-off (0.604) and test scores.
 
 **Browse the MLflow runs** (also from Docker, because MLflow saves the file paths as they are inside the container):
 
@@ -255,12 +285,12 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-37 tests in `tests/`:
-- **API (`test_api.py`):** `/health`, the web page, the response format, the trained cut-off, fixed applicants with known scores, `loan_percent_income` being recalculated, 12 kinds of invalid input that must return 422, the prediction log and `/stats`, and the API still answering when the log can't be written.
+38 tests in `tests/`:
+- **API (`test_api.py`):** `/health`, the web page, the response format, the max-profit cut-off, fixed applicants with known scores (including one just above and one just below the cut-off), `loan_percent_income` being recalculated, 12 kinds of invalid input that must return 422, the prediction log and `/stats`, and the API still answering when the log can't be written.
 - **Model file (`test_model_file.py`):** the file loads with its portable XGBoost boosters, handles missing values, and saving then loading gives identical predictions.
 - **Drift check (`test_drift.py`):** the training split matches the notebook (25,927 rows), PSI is near 0 for the same data and high for shifted data, the status bands, and the exit codes.
 
-**The tests were checked against planted bugs**, to make sure they catch real mistakes: allowing grade B after a prior default, falling back to a 0.5 cut-off, and miscounting high-risk applicants per grade. Each one makes a test fail.
+**The tests were checked against planted bugs**, to make sure they catch real mistakes: allowing grade B after a prior default, miscounting high-risk applicants per grade, and serving the wrong cut-off (0.5, the old best-F1 0.604, or a too-strict 0.077). Each one makes a test fail.
 
 ---
 

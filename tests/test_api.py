@@ -25,7 +25,8 @@ def test_predict_response_shape(client, risky_applicant):
 
 
 def test_threshold_is_the_trained_one(client, safe_applicant):
-    assert client.post("/predict", json=safe_applicant).json()["threshold"] == pytest.approx(0.604, abs=5e-4)
+    # Max-profit cut-off from the notebook (LGD 60%, 1-year term)
+    assert client.post("/predict", json=safe_applicant).json()["threshold"] == pytest.approx(0.170, abs=5e-4)
 
 
 def test_known_applicants(client, risky_applicant, safe_applicant):
@@ -39,24 +40,44 @@ def test_known_applicants(client, risky_applicant, safe_applicant):
     assert safe["default_probability"] == pytest.approx(0.016154, abs=1e-4)
 
 
-def test_borderline_applicant_uses_trained_cutoff(client):
-    # Scores 0.576: high risk with a plain 0.5 cut-off, low risk with the trained
-    # 0.604 cut-off. Catches the API falling back to 0.5 by mistake.
+def test_applicant_above_cutoff_is_high_risk(client):
+    # The README example scores 0.384: high risk with the 0.170 max-profit cut-off,
+    # but low risk with a plain 0.5 or the old best-F1 0.604 cut-off.
+    # Catches the API falling back to either of those by mistake.
     applicant = {
-        "person_age": 22,
-        "person_income": 12000,
-        "person_home_ownership": "MORTGAGE",
-        "person_emp_length": 7,
+        "person_age": 28,
+        "person_income": 54000,
+        "person_home_ownership": "RENT",
+        "person_emp_length": 4,
         "loan_intent": "EDUCATION",
-        "loan_grade": "D",
-        "loan_amnt": 1500,
-        "loan_int_rate": 14.84,
-        "cb_person_default_on_file": "Y",
-        "cb_person_cred_hist_length": 3,
+        "loan_grade": "B",
+        "loan_amnt": 12000,
+        "loan_int_rate": 11.4,
+        "cb_person_default_on_file": "N",
+        "cb_person_cred_hist_length": 6,
     }
     body = client.post("/predict", json=applicant).json()
-    assert body["default_probability"] == pytest.approx(0.576241, abs=1e-4)
-    assert body["default_prediction"] == 0
+    assert body["default_probability"] == pytest.approx(0.384160, abs=1e-4)
+    assert body["Result"] == "High Risk"
+
+
+def test_applicant_just_below_cutoff_is_low_risk(client):
+    # Scores 0.130, just under the 0.170 cut-off. Catches a cut-off that is
+    # stricter than intended (for example the 0.077 that an LGD of 100% gives).
+    applicant = {
+        "person_age": 24,
+        "person_income": 92000,
+        "person_home_ownership": "RENT",
+        "person_emp_length": 1,
+        "loan_intent": "VENTURE",
+        "loan_grade": "C",
+        "loan_amnt": 25000,
+        "loan_int_rate": 12.73,
+        "cb_person_default_on_file": "Y",
+        "cb_person_cred_hist_length": 4,
+    }
+    body = client.post("/predict", json=applicant).json()
+    assert body["default_probability"] == pytest.approx(0.130002, abs=1e-4)
     assert body["Result"] == "Low Risk"
 
 
