@@ -105,7 +105,7 @@
   }
 
   /* ---------- Grade rules (taken from credit_risk_dataset.csv) ---------- */
-  // Interest rate range per grade: 1st to 99th percentile of the training data,
+  // Interest rate range per grade: 1st to 99th percentile of the whole dataset,
   // so a few outlier rows (e.g. 6.0% on grade D) don't widen the range.
   // Low end rounded down and high end rounded up, so no real value is cut off.
   const RATE_RANGES = {
