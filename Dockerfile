@@ -11,7 +11,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Dependencies first: this layer is reused as long as requirements.txt doesn't change.
-# On Linux the `xgboost` package also pulls in NVIDIA's GPU library (~800 MB).
+# On Linux the `xgboost` package includes GPU (CUDA) code and also pulls in
+# NVIDIA's NCCL library (205 MB): about 540 MB more image on disk.
 # The API only predicts on CPU, so the image installs `xgboost-cpu` instead:
 # same version, same `import xgboost`, same model format. requirements.txt keeps
 # plain `xgboost` because xgboost-cpu has no macOS build.

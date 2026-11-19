@@ -67,7 +67,8 @@ All steps are in `Credit_Risk.ipynb`, one section per step.
 ### 4. Model (sections 9–10)
 - **Baseline:** Logistic Regression.
 - **Main model:** XGBoost, tuned with `RandomizedSearchCV` (150 candidates × 5 folds), optimising **average precision**, with a fixed `random_state`.
-- **Each XGBoost model trains on one thread (`n_jobs=1`).** A fixed `random_state` alone is not enough: the same XGBoost model trained with 2 threads and with 16 threads gave probabilities up to **0.30 apart**. Re-running the notebook on a 16-core laptop instead of Colab made the search pick different settings and a different cut-off (0.529 instead of 0.604). With one thread per model the result no longer depends on the number of cores. The search still trains 16 candidates in parallel, so it isn't slower.
+- **Each XGBoost model trains on one thread (`n_jobs=1`).** A fixed `random_state` alone is not enough: the same XGBoost model trained with 2 threads and with 16 threads gave probabilities up to **0.30 apart**. With one thread per model, the result no longer depends on the number of cores: on Linux, 2 and 8 CPUs gave identical predictions. The search still trains many candidates in parallel, so it isn't slower.
+- **The operating system matters too.** Even with one thread, re-running the notebook on Windows made the search pick different settings and a cut-off of 0.529 instead of 0.604. That's why the model is trained in a fixed Linux Docker image (see "Retrain the model").
 
 ### 5. Calibration and threshold (sections 12–13)
 - **Sigmoid (Platt) calibration** with `CalibratedClassifierCV`, so the probability matches the real default rate. Brier score improved from **0.0608 to 0.0511**.
@@ -226,7 +227,7 @@ To open the notebook locally, install `requirements-dev.txt` (it adds SHAP, MLfl
 
 ## Retrain the model (reproducible)
 
-XGBoost gives slightly different models on different operating systems, even with the same code, data, `random_state` and library versions. On Windows and Linux, the same single-threaded model differed by about 0.01 in probability on average. That's enough for the hyperparameter search to pick different settings. So the model is trained inside a fixed Linux image (`Dockerfile.train`: Python 3.13.5, every library pinned):
+XGBoost gives slightly different models on different operating systems, even with the same code, data, `random_state` and library versions. On Windows and Linux, the same single-threaded model differed by about 0.01 in probability on average. That's enough for the hyperparameter search to pick different settings: the full notebook on Windows chose another candidate and a cut-off of 0.529, against 0.604 on Linux. So the model is trained inside a fixed Linux image (`Dockerfile.train`: Python 3.13.5, every library pinned):
 
 ```bash
 docker build -f Dockerfile.train -t credit-risk-train .
@@ -280,7 +281,7 @@ To keep the prediction log when the container is removed or restarted, put it on
 docker run -p 8000:8000 -v credit-risk-data:/app/data credit-risk-api
 ```
 
-- **Small image:** on Linux, the `xgboost` package also installs NVIDIA's GPU library (~800 MB). The API only predicts on CPU, so the image installs `xgboost-cpu` at the same version instead. Predictions are identical to the last decimal. Compressed image size went from 424 MB to 165 MB.
+- **Small image:** on Linux, the `xgboost` package includes GPU (CUDA) code and also installs NVIDIA's NCCL library (205 MB). The API only predicts on CPU, so the image installs `xgboost-cpu` at the same version instead. Predictions are identical to the last decimal. The image went from 1.26 GB to 720 MB on disk (424 MB to 165 MB compressed).
 - **Only what the API needs:** the notebook, dataset and docs stay out of the image (`.dockerignore`).
 - **Runs as a normal user**, not root.
 - **Built-in health check:** Docker calls `/health` every 30 seconds and marks the container `healthy` or `unhealthy`.
